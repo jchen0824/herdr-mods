@@ -56,8 +56,7 @@ jobs:
           sleep 2
           # The welcome screen covers the window on a first start.
           herdr-app status | tee "$RUNNER_TEMP/status-before.json"
-          herdr-app do overlay.close || true
-          herdr-app do overlay.close || true
+          herdr-app do overlay.close --id frame-welcome
           herdr-app do tab.new --name Demo --mod kube --props '{"demo":true}'
           sleep 10
           herdr-app status | tee "$RUNNER_TEMP/status-after.json"
