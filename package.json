@@ -1,0 +1,10 @@
+{
+  "name": "herdr-mods",
+  "private": true,
+  "type": "module",
+  "description": "Mods for the Herdr desktop app",
+  "scripts": {
+    "test": "node --import ./kube/test/register.mjs --test kube/test/*.test.mjs"
+  },
+  "license": "MIT"
+}
