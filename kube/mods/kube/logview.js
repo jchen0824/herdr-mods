@@ -352,7 +352,8 @@ export class LogPanel {
 
     const textCell = (l, color, hit) => {
       if (this.wrap) return div().flex_1().min_w(0).text_color(color).child(l.text || " ");
-      if (!hit) return div().flex_1().min_w(0).truncate().text_color(color).child(l.text || " ");
+      // Unwrapped: whole lines on one row; the list scrolls sideways to reach their ends.
+      if (!hit) return div().flex_none().whitespace_nowrap().text_color(color).child(l.text || " ");
       const parts = [];
       let from = 0;
       for (const [a, b] of L.matches(l.text, q)) {
@@ -360,8 +361,8 @@ export class LogPanel {
         parts.push(div().flex_none().whitespace_nowrap().rounded(2).bg(t.ansi3).text_color(t.background).child(l.text.slice(a, b)));
         from = b;
       }
-      if (from < l.text.length) parts.push(div().min_w(0).truncate().text_color(color).child(l.text.slice(from)));
-      return h_flex().flex_1().min_w(0).overflow_hidden().children(parts);
+      if (from < l.text.length) parts.push(div().flex_none().whitespace_nowrap().text_color(color).child(l.text.slice(from)));
+      return h_flex().flex_none().children(parts);
     };
 
     const row = (l, i, h) => {
@@ -378,9 +379,12 @@ export class LogPanel {
     };
 
     const id = `kube-log-lines-${this.gen}`;
-    return div().flex_1().min_h(0).relative().font_family(font).text_size(FONT).line_height(`${LH}px`)
-      .on_scroll_wheel((e, cx) => { if (this.following && (e.delta?.y ?? 0) > 0) { this.following = false; cx.notify(); } })
-      .child(v_virtual_list(id, list.length, sizes, (i) => String(list[i]?.id ?? i),
+    // Unwrapped, the rows are as wide as the longest shown line (capped), inside a sideways
+    // scroll area; the virtual list keeps scrolling up and down inside it.
+    let longest = 0;
+    if (!this.wrap) for (const l of list) if (l.text.length > longest) longest = l.text.length;
+    const rowW = 24 + (this.showTime ? TIME_W + 8 : 0) + (multi ? srcW + 8 : 0) + Math.ceil(Math.min(longest, 4000) * CHAR_W) + 16;
+    const lines = v_virtual_list(id, list.length, sizes, (i) => String(list[i]?.id ?? i),
         (range) => list.slice(range.start, range.end).map((l, j) => row(l, range.start + j, Array.isArray(sizes) ? sizes[range.start + j] : sizes)))
         .size_full().track_scroll(this.scroll)
         .on_item_click((key, cx) => {
@@ -388,7 +392,11 @@ export class LogPanel {
           this.picked.has(n) ? this.picked.delete(n) : this.picked.add(n);
           this.focusH.focus();
           cx.notify();
-        }))
+        });
+    return div().flex_1().min_h(0).relative().font_family(font).text_size(FONT).line_height(`${LH}px`)
+      .on_scroll_wheel((e, cx) => { if (this.following && (e.delta?.y ?? 0) > 0) { this.following = false; cx.notify(); } })
+      .child(this.wrap ? lines : div().id(`${id}-x`).size_full().overflow_x_scrollbar()
+        .child(div().w_full().min_w(rowW).h_full().child(lines)))
       .child(Scrollbar.vertical(id).viewport_from_layout().absolute().inset_0());
   }
 }

@@ -22,7 +22,7 @@ An OpenLens-style Kubernetes panel for the [Herdr](https://herdr.dev) desktop ap
   - the previous container's logs after a crash
   - one colour per pod, click a pod to hide it
   - search with next and previous, "only matches", level filter (all, warn and above, errors)
-  - wrap, show or hide time
+  - wrap, or scroll sideways through long lines; show or hide time
   - click lines to pick them, then **Copy** or **Ask agent** (sends them to a new Claude Code session, or another installed agent)
   - **Open in terminal** for plain `kubectl logs -f`
 - **Actions:** Logs, Shell (`bash`, else `sh`), Port-forward (from container and service ports), Describe, Restart (Deployments, StatefulSets, DaemonSets) and Scale (Deployments, StatefulSets). Restart and scale ask first; on a production cluster the confirmation is red and names the cluster.
