@@ -110,3 +110,13 @@ test("big lists are read a page at a time, under Herdr's output cap", async () =
 test("cut-off JSON says so", () => {
   assert.throws(() => K.parseJSON('{"items":[{"a":', "pods"), /unreadable JSON for pods \(15 bytes\)/);
 });
+
+test("YAML quotes what would not read back as the same string", async () => {
+  // Found by fast-check: "@" (a reserved indicator), "0." (a number) and "A " (a key with a
+  // trailing space) were written unquoted.
+  const { parse } = await import("yaml");
+  const o = { apiVersion: "v1", kind: "ConfigMap", metadata: { name: "c", labels: { "A ": "x" } }, data: { at: "@", zero: "0.", inf: ".inf", ok: "plain text" } };
+  const y = K.toYaml(o);
+  assert.deepEqual(parse(y), o);
+  assert.ok(y.includes("ok: plain text"), "ordinary strings stay unquoted");
+});
