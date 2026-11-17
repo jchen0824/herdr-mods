@@ -6,8 +6,9 @@ An OpenLens-style Kubernetes panel for the [Herdr](https://herdr.dev) desktop ap
 
 ## Features
 
-- **Clusters.** Every kubeconfig context, with readable names (`gke_…_europe-west1_shop` reads "shop · GKE · europe-west1") and a coloured badge. Tick several to see their rows together, with a Cluster column. Contexts whose name contains `prod`, `production`, `prd` or `live` are marked in red.
-- **Namespaces.** Pick any namespace, or all of them.
+- **Clusters.** Every kubeconfig context, with readable names (`gke_…_europe-west1_shop` reads "shop · GKE · europe-west1") and a coloured badge. Tick several to see their rows together, with a Cluster column. The picker scrolls and has a filter field: type to narrow it by name, provider or region, and press Enter for the first match. Contexts whose name contains `prod`, `production`, `prd` or `live` are marked in red.
+- **Namespaces.** Pick any namespace, or all of them. The picker scrolls and has a filter field: type part of a name and press Enter for the first match.
+- **Big clusters.** Lists are read from the API 250 objects at a time, so clusters with thousands of pods load in full (Herdr caps each command's output at 8 MiB).
 - **Resources**, grouped as in OpenLens:
   - Cluster: Nodes, Namespaces, Events
   - Workloads: Pods, Deployments, StatefulSets, DaemonSets, ReplicaSets, Jobs, CronJobs
@@ -64,6 +65,7 @@ It opens in a tab. To open it with a key, merge `keys.json` (`cmd-shift-k`) into
 | Where | Key | Action |
 | --- | --- | --- |
 | Panel | `/` | Search |
+| Cluster or namespace picker | type, `Enter` | Filter the list, pick the first match |
 | | `↑` `↓` / `j` `k` | Move through the list |
 | | `l` `s` `d` | Logs, shell, describe the selected object |
 | | `y` | Overview / YAML |

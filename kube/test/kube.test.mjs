@@ -84,3 +84,29 @@ test("errors are sorted into sign-in, missing helper and other", () => {
   const other = new K.KubeError("dial tcp 10.0.0.1:443: i/o timeout");
   assert.ok(!other.auth && !other.plugin && !other.missing);
 });
+
+test("list paths per API group and scope", () => {
+  assert.equal(K.listPath(K.kindById("pods"), null), "/api/v1/pods");
+  assert.equal(K.listPath(K.kindById("pods"), "a b"), "/api/v1/namespaces/a%20b/pods");
+  assert.equal(K.listPath(K.kindById("deployments"), "shop"), "/apis/apps/v1/namespaces/shop/deployments");
+  assert.equal(K.listPath(K.kindById("nodes"), "shop"), "/api/v1/nodes");
+  assert.equal(K.listPath(K.kindById("hpa"), null), "/apis/autoscaling/v2/horizontalpodautoscalers");
+});
+
+test("big lists are read a page at a time, under Herdr's output cap", async () => {
+  // Runs after the PATH test above, so kubectl's PATH probe has already been answered.
+  const pod = (n) => ({ metadata: { name: n, namespace: "x", managedFields: [{ big: true }] }, spec: {}, status: {} });
+  replies.push({ code: 0, stdout: JSON.stringify({ items: [pod("a"), pod("b")], metadata: { continue: "tok/1 2" } }), stderr: "" });
+  replies.push({ code: 0, stdout: JSON.stringify({ items: [pod("c")], metadata: {} }), stderr: "" });
+  const before = calls.length;
+  const items = await K.list(K.kindById("pods"), { context: "dev", namespace: null });
+  assert.deepEqual(items.map((o) => o.metadata.name), ["a", "b", "c"]);
+  assert.ok(items.every((o) => o.kind === "Pod" && !o.metadata.managedFields));
+  const [first, second] = calls.slice(before).map((c) => c.at(-1));
+  assert.equal(first, "/api/v1/pods?limit=250");
+  assert.equal(second, "/api/v1/pods?limit=250&continue=tok%2F1%202");
+});
+
+test("cut-off JSON says so", () => {
+  assert.throws(() => K.parseJSON('{"items":[{"a":', "pods"), /unreadable JSON for pods \(15 bytes\)/);
+});

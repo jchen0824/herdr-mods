@@ -56,6 +56,15 @@ export default class Kube extends View {
     this.input.on("change", (_e, cx) => { this.q = this.input.value().trim().toLowerCase(); cx.notify(); });
     this.input.on("focus", () => { this.typing = true; });
     this.input.on("blur", () => { this.typing = false; });
+    // Filters at the top of the cluster and namespace pickers.
+    this.ctxQ = ""; this.nsQ = "";
+    this.ctxFilter = InputState.new({ placeholder: "Filter clusters…" });
+    this.ctxFilter.on("change", (_e, cx) => { this.ctxQ = this.ctxFilter.value().trim().toLowerCase(); cx.notify(); });
+    this.ctxFilter.on("submit", (_e, cx) => { const c = this.ctxMatches()[0]; if (c) { this.open.ctx = false; this.useContext(c.name, cx); } cx.notify(); });
+    this.nsFilter = InputState.new({ placeholder: "Filter namespaces…" });
+    this.nsFilter.on("change", (_e, cx) => { this.nsQ = this.nsFilter.value().trim().toLowerCase(); cx.notify(); });
+    this.nsFilter.on("submit", (_e, cx) => { const n = this.nsMatches(); if (n.length) { this.open.ns = false; const pick = n[0]; if (pick !== this.ns) this.useNamespace(pick, cx); } cx.notify(); });
+    for (const f of [this.ctxFilter, this.nsFilter]) { f.on("focus", () => { this.typing = true; }); f.on("blur", () => { this.typing = false; }); }
     this.scaleInput = InputState.new({ placeholder: "replicas" });
     this.scaleInput.on("submit", (_e, cx) => this.askScale(cx));
     this.scaleInput.on("focus", () => { this.typing = true; });
@@ -84,6 +93,22 @@ export default class Kube extends View {
     if (!props()?.docked) return null;
     const find = (n) => (n?.content?.mod === "kube" && n.content.props?.docked ? n : (n?.children ?? []).map(find).find(Boolean));
     try { return find(layout())?.id ?? null; } catch { return null; }
+  }
+
+  ctxMatches() {
+    const q = this.ctxQ;
+    return this.ctxs.filter((c) => !q || `${c.name} ${K.contextLabel(c.name).title} ${K.contextLabel(c.name).sub}`.toLowerCase().includes(q));
+  }
+  // null is "All namespaces"; it stays first while nothing is typed.
+  nsMatches() {
+    const q = this.nsQ;
+    return q ? this.nsList.filter((n) => n.toLowerCase().includes(q)) : [null, ...this.nsList];
+  }
+  // Opening a picker clears its filter and puts the cursor in it.
+  openPicker(which, open) {
+    this.open[which] = open;
+    const f = which === "ctx" ? this.ctxFilter : this.nsFilter;
+    if (open) { f.set_value(""); this[which === "ctx" ? "ctxQ" : "nsQ"] = ""; f.focus(); }
   }
 
   kind() { return K.kindById(this.kindId); }
@@ -415,38 +440,51 @@ export default class Kube extends View {
       : one;
     const prod = this.prod();
     const groups = [...new Set(K.KINDS.map((k) => k.group))];
-    const ctxList = v_flex().id("kube-ctx-list").min_w(300).max_h(420).overflow_y_scrollbar().p(5).gap(1).rounded(8)
+    // A picker card: a fixed height (what a scroll area needs to scroll inside a popover), a
+    // filter field, then the list scrolling under it. Typing filters; Enter picks the first.
+    const picker = (id, w, height, title, filter, rows, empty) => v_flex().id(`${id}-card`).w(w).h(height).p(5).gap(4).rounded(8)
       .bg(t.popover).border_1().border_color(t.border).shadow_md()
-      .child(div().px(8).pt(6).pb(3).text_size(10.5).text_color(t.dim).child("CLUSTERS · click to show one, tick to show several"))
-      .children(this.ctxs.map((c) => {
-        const l = K.contextLabel(c.name), p = K.isProd(c.name), on = this.sel.includes(c.name);
-        return h_flex().id(`kube-ctx-${c.name}`).h(40).px(8).gap(8).items_center().rounded(5).cursor_pointer()
-          .when(on, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover))
-          .on_click((_e, cx) => { this.open.ctx = false; if (!(on && !this.multi())) this.useContext(c.name, cx); cx.notify(); })
-          .child(this.badge(t, l.title, p))
-          .child(v_flex().flex_1().min_w(0)
-            .child(div().truncate().text_size(12.5).text_color(t.foreground).child(l.title))
-            .child(div().truncate().text_size(10.5).text_color(t.dim).child(l.sub || c.name)))
-          .when(p, (e) => e.child(div().px(5).rounded(4).bg(t.ansi1).text_color(t.background).text_size(9.5).font_semibold().child("PROD")))
-          .child(div().id(`kube-ctx-tick-${c.name}`).size(18).flex_none().flex().items_center().justify_center().rounded(4)
-            .border_1().border_color(on ? t.accent : t.input).bg(on ? t.accent : t.popover).text_color(t.accent_foreground).text_size(11)
-            .tooltip(on ? "Stop showing this cluster" : "Show this cluster too")
-            .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-            .on_click((_e, cx) => { cx.stop_propagation(); this.toggleContext(c.name, cx); cx.notify(); })
-            .child(on ? "✓" : ""));
-      }));
-    const nsList = v_flex().id("kube-ns-list").min_w(220).max_h(420).overflow_y_scrollbar().p(5).gap(1).rounded(8)
-      .bg(t.popover).border_1().border_color(t.border).shadow_md()
-      .children([null, ...this.nsList].map((n) => h_flex().id(`kube-ns-${n ?? "*"}`).h(26).px(8).gap(8).items_center().rounded(5).cursor_pointer()
-        .text_size(12).when(n === this.ns, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover))
-        .on_click((_e, cx) => { this.open.ns = false; if (n !== this.ns) this.useNamespace(n, cx); cx.notify(); })
-        .child(div().w(12).flex_none().text_color(t.accent).child(n === this.ns ? "✓" : ""))
-        .child(div().flex_1().min_w(0).truncate().text_color(n ? t.foreground : t.muted).child(n ?? "All namespaces"))))
-      .when(!this.nsList.length, (e) => e.child(div().p(8).text_size(11.5).text_color(t.dim).child(this.error ? "Can't list namespaces" : "Loading…")));
+      .child(div().px(8).pt(4).text_size(10.5).text_color(t.dim).child(title))
+      .child(h_flex().id(`${id}-filter`).h(28).flex_none().mx(3).px(8).gap(6).items_center().rounded(6).border_1().border_color(t.accent).bg(t.background)
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .child(svg(ICON("search")).size(12).text_color(t.dim))
+        .child(Input.new(filter).flex_1().h_full().text_size(12).text_color(t.foreground)))
+      .child(div().flex_1().min_h(0).relative()
+        .child(v_flex().id(`${id}-list`).size_full().overflow_y_scroll().gap(1).children(rows)
+          .when(!rows.length, (e) => e.child(div().p(8).text_size(11.5).text_color(t.dim).child(empty))))
+        .child(Scrollbar.vertical(`${id}-list`).absolute().inset_0()));
+
+    const ctxRows = this.ctxMatches().map((c) => {
+      const l = K.contextLabel(c.name), p = K.isProd(c.name), on = this.sel.includes(c.name);
+      return h_flex().id(`kube-ctx-${c.name}`).h(40).flex_none().px(8).gap(8).items_center().rounded(5).cursor_pointer()
+        .when(on, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover))
+        .on_click((_e, cx) => { this.open.ctx = false; if (!(on && !this.multi())) this.useContext(c.name, cx); cx.notify(); })
+        .child(this.badge(t, l.title, p))
+        .child(v_flex().flex_1().min_w(0)
+          .child(div().truncate().text_size(12.5).text_color(t.foreground).child(l.title))
+          .child(div().truncate().text_size(10.5).text_color(t.dim).child(l.sub || c.name)))
+        .when(p, (e) => e.child(div().px(5).rounded(4).bg(t.ansi1).text_color(t.background).text_size(9.5).font_semibold().child("PROD")))
+        .child(div().id(`kube-ctx-tick-${c.name}`).size(18).flex_none().flex().items_center().justify_center().rounded(4)
+          .border_1().border_color(on ? t.accent : t.input).bg(on ? t.accent : t.popover).text_color(t.accent_foreground).text_size(11)
+          .tooltip(on ? "Stop showing this cluster" : "Show this cluster too")
+          .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+          .on_click((_e, cx) => { cx.stop_propagation(); this.toggleContext(c.name, cx); cx.notify(); })
+          .child(on ? "✓" : ""));
+    });
+    const ctxList = picker("kube-ctx", 320, Math.min(440, 84 + Math.max(1, this.ctxs.length) * 41), "CLUSTERS · click to show one, tick to show several",
+      this.ctxFilter, ctxRows, this.ctxs.length ? `No cluster matches “${this.ctxQ}”` : "No clusters");
+
+    const nsRows = this.nsMatches().map((n) => h_flex().id(`kube-ns-${n ?? "*"}`).h(26).flex_none().px(8).gap(8).items_center().rounded(5).cursor_pointer()
+      .text_size(12).when(n === this.ns, (e) => e.bg(t.selected)).hover((s) => s.bg(t.hover))
+      .on_click((_e, cx) => { this.open.ns = false; if (n !== this.ns) this.useNamespace(n, cx); cx.notify(); })
+      .child(div().w(12).flex_none().text_color(t.accent).child(n === this.ns ? "✓" : ""))
+      .child(div().flex_1().min_w(0).truncate().text_color(n ? t.foreground : t.muted).child(n ?? "All namespaces")));
+    const nsList = picker("kube-ns", 260, Math.min(420, 84 + (this.nsList.length + 1) * 27), "NAMESPACES",
+      this.nsFilter, nsRows, !this.nsList.length ? (this.error ? "Can't list namespaces" : "Loading…") : `No namespace matches “${this.nsQ}”`);
 
     return v_flex().w(sideW).flex_none().h_full().bg(t.chrome).border_r(1).border_color(t.border)
       .child(v_flex().p(8).gap(6).border_b(1).border_color(t.border)
-        .child(Popover.new("kube-ctx-menu").open(this.open.ctx).on_open_change((o, cx) => { this.open.ctx = o; cx.notify(); })
+        .child(Popover.new("kube-ctx-menu").open(this.open.ctx).on_open_change((o, cx) => { this.openPicker("ctx", o); cx.notify(); })
           .trigger(h_flex().id("kube-ctx").h(44).px(8).gap(8).items_center().rounded(7).cursor_pointer()
             .border_1().border_color(prod ? t.ansi1 : this.open.ctx ? t.accent : t.border).hover((s) => s.bg(t.hover))
             .child(this.badge(t, label.title, prod))
@@ -455,7 +493,7 @@ export default class Kube extends View {
               .child(div().truncate().text_size(10.5).text_color(prod ? t.ansi1 : t.dim).child(prod ? `PRODUCTION · ${label.sub}` : label.sub)))
             .child(div().text_size(9).text_color(t.dim).child("▾")))
           .content(ctxList))
-        .child(Popover.new("kube-ns-menu").open(this.open.ns).on_open_change((o, cx) => { this.open.ns = o; cx.notify(); })
+        .child(Popover.new("kube-ns-menu").open(this.open.ns).on_open_change((o, cx) => { this.openPicker("ns", o); cx.notify(); })
           .trigger(h_flex().id("kube-ns").h(28).px(8).gap(6).items_center().rounded(6).cursor_pointer().text_size(12)
             .border_1().border_color(this.open.ns ? t.accent : t.border).hover((s) => s.bg(t.hover))
             .child(div().text_color(t.dim).child("ns"))
