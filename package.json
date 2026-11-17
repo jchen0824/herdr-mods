@@ -4,7 +4,11 @@
   "type": "module",
   "description": "Mods for the Herdr desktop app",
   "scripts": {
-    "test": "node --import ./kube/test/register.mjs --test kube/test/*.test.mjs"
+    "test": "node --import ./kube/test/register.mjs --test kube/test/*.test.mjs scripts/*.test.mjs",
+    "check": "node scripts/check-mods.mjs && npm test"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.6"
+  }
 }

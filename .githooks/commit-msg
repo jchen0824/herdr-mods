@@ -1,0 +1,3 @@
+#!/bin/sh
+# Rejects commit subjects that aren't Conventional Commits. Enable with: make hooks
+exec node "$(git rev-parse --show-toplevel)/scripts/check-commits.mjs" --file "$1"
