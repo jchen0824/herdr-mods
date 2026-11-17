@@ -1,0 +1,71 @@
+# Experiment: can Herdr render on a headless runner (Xvfb + Mesa lavapipe) so `herdr-app shot`
+# can capture mods for visual regression tests? Not a check yet; it uploads what it gets.
+name: visual-spike
+
+on:
+  push:
+    branches: [spike/visual-ci]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      HERDR_APP_HOME: ${{ runner.temp }}/herdr-home
+      DISPLAY: ":99"
+      LIBGL_ALWAYS_SOFTWARE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Software Vulkan and a virtual display
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb mesa-vulkan-drivers libvulkan1 vulkan-tools libxkbcommon-x11-0 libxcb-xkb1 x11-utils >/dev/null
+          Xvfb :99 -screen 0 1600x1000x24 >"$RUNNER_TEMP/xvfb.log" 2>&1 &
+          sleep 2
+          vulkaninfo --summary 2>&1 | grep -E "deviceName|driverName|apiVersion" | head -6 || echo "vulkaninfo failed"
+      - name: Install Herdr
+        run: |
+          curl -fsSL https://releases.herdr.dev/app/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Missing libraries
+        run: |
+          ldd "$HOME/.local/share/herdr-app/herdr-app" | grep "not found" || echo "none missing"
+      - name: Put the kube mod in a fresh Herdr home
+        run: |
+          mkdir -p "$HERDR_APP_HOME/mods"
+          cp -R kube/mods/kube "$HERDR_APP_HOME/mods/kube"
+      - name: Launch Herdr and wait for its first frame
+        run: |
+          herdr-app >"$RUNNER_TEMP/herdr-app.log" 2>&1 &
+          for i in $(seq 1 60); do
+            if herdr-app status >"$RUNNER_TEMP/status.json" 2>&1; then echo "up after ${i}s"; break; fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/status.json"
+          herdr-app shot "$RUNNER_TEMP/0-first.png" || true
+      - name: Open the kube demo and capture it
+        run: |
+          herdr-app do overlay.close || true
+          herdr-app do tab.new --name Demo --mod kube --props '{"demo":true}' || true
+          sleep 10
+          herdr-app status || true
+          herdr-app shot "$RUNNER_TEMP/1-kube-demo.png" || true
+          herdr-app shot "$RUNNER_TEMP/2-again.png" || true
+          ls -la "$RUNNER_TEMP"/*.png || true
+      - name: Keep the shots and logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: visual-spike
+          path: |
+            ${{ runner.temp }}/*.png
+            ${{ runner.temp }}/*.log
+            ${{ runner.temp }}/status.json
+            ${{ runner.temp }}/herdr-home/**/*.error
+          retention-days: 7
