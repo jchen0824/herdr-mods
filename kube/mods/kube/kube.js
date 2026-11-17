@@ -322,7 +322,7 @@ export const kindByName = (kind) => KINDS.find((k) => k.kind === kind);
 // compact JSON (~9 KB a pod), PAGE objects at a time with its continue token.
 export let PAGE = 250; // let: tests page with small sizes
 export const setPage = (n) => { PAGE = n; };
-const MAX_PAGES = 400;
+export const MAX_PAGES = 400; // 100,000 objects at the default page size
 
 export function listPath(k, namespace) {
   const api = apiOf(k);
@@ -347,9 +347,10 @@ export async function rawList(context, path, params = {}, what = path) {
     const out = parseJSON(await kubectl(["get", "--raw", `${path}?${q}`], { context, timeout: 40000 }), what);
     for (const o of out.items ?? []) { if (o.metadata) delete o.metadata.managedFields; items.push(o); }
     cont = out.metadata?.continue ?? "";
-    if (!cont) break;
+    if (!cont) return items;
   }
-  return items;
+  // The server still had more: never show a partial list as if it were all of it.
+  throw new KubeError(`${what}: stopped after ${MAX_PAGES} pages (${items.length} objects) and the list was still going; not showing an incomplete list`);
 }
 
 export async function list(k, { context, namespace }) {

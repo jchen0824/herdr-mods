@@ -42,3 +42,15 @@ test("list() reads it in pages, every one under the cap, and gets every object",
   assert.ok(Math.max(...outputs) < EXEC_CAP);
   assert.ok(items.every((o) => !o.metadata.managedFields));
 });
+
+test("a list that never ends is an error, not a partial result", async () => {
+  // A server that always hands back another continue token: before the fix this returned
+  // MAX_PAGES objects as if that were the whole list.
+  K.setPage(1);
+  setHandler((cmd) => cmd === "/bin/sh"
+    ? { code: 0, stdout: "/usr/bin", stderr: "" }
+    : { code: 0, stdout: JSON.stringify({ items: [{ metadata: { name: "x" } }], metadata: { continue: "more" } }), stderr: "" });
+  await assert.rejects(K.list(K.kindById("pods"), { context: "endless", namespace: null }),
+    new RegExp(`stopped after ${K.MAX_PAGES} pages .* not showing an incomplete list`));
+  K.setPage(250);
+});
