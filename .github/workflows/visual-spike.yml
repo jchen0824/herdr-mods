@@ -41,6 +41,8 @@ jobs:
         run: |
           mkdir -p "$HERDR_APP_HOME/mods"
           cp -R kube/mods/kube "$HERDR_APP_HOME/mods/kube"
+          # Mark the first-run welcome as done, as Herdr itself records it.
+          echo '{"frame.welcomed":"finished"}' > "$HERDR_APP_HOME/shared.json"
       - name: Launch Herdr and wait for its first frame
         run: |
           herdr-app >"$RUNNER_TEMP/herdr-app.log" 2>&1 &
@@ -56,7 +58,6 @@ jobs:
           sleep 2
           # The welcome screen covers the window on a first start.
           herdr-app status | tee "$RUNNER_TEMP/status-before.json"
-          herdr-app do overlay.close --id frame-welcome
           herdr-app do tab.new --name Demo --mod kube --props '{"demo":true}'
           sleep 10
           herdr-app status | tee "$RUNNER_TEMP/status-after.json"
