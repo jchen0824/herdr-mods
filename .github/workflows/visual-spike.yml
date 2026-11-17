@@ -52,13 +52,33 @@ jobs:
           herdr-app shot "$RUNNER_TEMP/0-first.png" || true
       - name: Open the kube demo and capture it
         run: |
+          herdr-app do space.new --name ci
+          sleep 2
+          # The welcome screen covers the window on a first start.
+          herdr-app status | tee "$RUNNER_TEMP/status-before.json"
           herdr-app do overlay.close || true
-          herdr-app do tab.new --name Demo --mod kube --props '{"demo":true}' || true
+          herdr-app do overlay.close || true
+          herdr-app do tab.new --name Demo --mod kube --props '{"demo":true}'
           sleep 10
-          herdr-app status || true
-          herdr-app shot "$RUNNER_TEMP/1-kube-demo.png" || true
-          herdr-app shot "$RUNNER_TEMP/2-again.png" || true
-          ls -la "$RUNNER_TEMP"/*.png || true
+          herdr-app status | tee "$RUNNER_TEMP/status-after.json"
+          herdr-app shot "$RUNNER_TEMP/1-kube-demo.png"
+          sleep 6
+          herdr-app shot "$RUNNER_TEMP/2-kube-demo-later.png"
+          cmp -s "$RUNNER_TEMP/1-kube-demo.png" "$RUNNER_TEMP/2-kube-demo-later.png" && echo "SHOTS IDENTICAL" || echo "SHOTS DIFFER"
+          python3 - "$RUNNER_TEMP/1-kube-demo.png" "$RUNNER_TEMP/2-kube-demo-later.png" <<'PY' || true
+          import sys, zlib, struct
+          def pixels(p):
+              d = open(p, "rb").read(); i = 8; idat = b""; w = h = 0
+              while i < len(d):
+                  n, t = struct.unpack(">I4s", d[i:i+8]); c = d[i+8:i+8+n]
+                  if t == b"IHDR": w, h = struct.unpack(">II", c[:8])
+                  if t == b"IDAT": idat += c
+                  i += 12 + n
+              return w, h, zlib.decompress(idat)
+          (w, h, a), (_, _, b) = pixels(sys.argv[1]), pixels(sys.argv[2])
+          diff = sum(1 for x, y in zip(a, b) if x != y)
+          print(f"{w}x{h}: {diff} of {len(a)} raw bytes differ")
+          PY
       - name: Keep the shots and logs
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -67,6 +87,6 @@ jobs:
           path: |
             ${{ runner.temp }}/*.png
             ${{ runner.temp }}/*.log
-            ${{ runner.temp }}/status.json
+            ${{ runner.temp }}/*.json
             ${{ runner.temp }}/herdr-home/**/*.error
           retention-days: 7
