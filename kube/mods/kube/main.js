@@ -79,6 +79,13 @@ export default class Kube extends View {
     return panes().some((p) => p.mod === "kube" && p.tab === tab);
   }
 
+  // The layout block holding this copy, when it is the docked one.
+  dockId() {
+    if (!props()?.docked) return null;
+    const find = (n) => (n?.content?.mod === "kube" && n.content.props?.docked ? n : (n?.children ?? []).map(find).find(Boolean));
+    try { return find(layout())?.id ?? null; } catch { return null; }
+  }
+
   kind() { return K.kindById(this.kindId); }
   multi() { return this.sel.length > 1; }
   prod() { return this.sel.some((c) => K.isProd(c)); }
@@ -502,7 +509,14 @@ export default class Kube extends View {
       .child(h_flex().id("kube-refresh").size(28).flex_none().items_center().justify_center().rounded(6).cursor_pointer()
         .text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Refresh (every 5 s while shown)")
         .on_click((_e, cx) => { this.error = null; this.refresh(cx); cx.notify(); })
-        .child(this.loading || this.busy ? svg(ICON("spinner")).size(14).text_color(t.accent).spin(900) : svg(ICON("refresh")).size(14)));
+        .child(this.loading || this.busy ? svg(ICON("spinner")).size(14).text_color(t.accent).spin(900) : svg(ICON("refresh")).size(14)))
+      // Docked in the layout (props { docked: true }): a way to put the panel away. The top-bar
+      // button or layout.show brings it back.
+      .when(Boolean(this.dockId()), (e) => e.child(h_flex().id("kube-hide-panel").size(28).flex_none().items_center().justify_center().rounded(6)
+        .cursor_pointer().text_color(t.muted).hover((s) => s.bg(t.hover).text_color(t.foreground)).tooltip("Hide panel")
+        .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
+        .on_click(() => run("layout.hide", { id: this.dockId() }))
+        .child(svg(ICON("close")).size(13))));
 
     let body;
     if (this.error && !this.items.length) body = this.notice(t);

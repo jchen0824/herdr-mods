@@ -57,7 +57,7 @@ herdr-app do tab.new --name Kubernetes --mod kube
 
 No cluster at hand? `herdr-app do tab.new --name Demo --mod kube --props '{"demo":true}'` opens it on three made-up clusters (pods, usage, events and live logs; terminals are off there).
 
-It opens in a tab. To open it with a key, merge `keys.json` (`cmd-shift-k`) into yours. To keep it beside your terminals instead, add a block with `"content": { "mod": "kube" }` to a cloned layout.
+It opens in a tab. To open it with a key, merge `keys.json` (`cmd-shift-k`) into yours. To keep it beside your terminals instead, add a block with `"content": { "mod": "kube", "props": { "docked": true } }` to a cloned layout. `docked` gives it a × that hides the block (`layout.hide`); `layout.show`, or the top bar button in [topbar-actions](../topbar-actions), brings it back.
 
 ## Keys
 
