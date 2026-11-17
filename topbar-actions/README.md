@@ -17,7 +17,7 @@ By hand:
 3. In `layouts/my-main.json`, wrap the `tabs` block in a row with this block after it (the row takes the `tabs` block's `size`, `resizable: false` and `window_drag: true`; the tabs block gets `"size": { "weight": 1 }`):
 
    ```json
-   { "id": "topbar-actions", "type": "block", "size": { "px": 196 }, "content": { "mod": "topbar-actions" } }
+   { "id": "topbar-actions", "type": "block", "size": { "px": 184 }, "content": { "mod": "topbar-actions" } }
    ```
 
 4. `herdr-app check ~/.config/herdr-app/mods/topbar-actions`.

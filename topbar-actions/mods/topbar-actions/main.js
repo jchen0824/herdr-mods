@@ -24,7 +24,7 @@ export default class TopbarActions extends View {
       .on_click(() => fn())
       .child(svg(`mods/topbar-actions/${icon}.svg`).size(14))
       .child(label);
-    return h_flex().size_full().items_center().justify_end().gap(3).pr(10).bg(t.chrome).border_b(1).border_color(t.border)
+    return h_flex().size_full().items_center().justify_start().gap(3).pl(2).pr(10).bg(t.chrome).border_b(1).border_color(t.border)
       .child(button("topbar-review", "review", "Review", () => run("mod.open", { name: "redline" })))
       .child(button("topbar-kube", "kube", "Kubernetes", openKube));
   }
