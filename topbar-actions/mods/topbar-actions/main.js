@@ -1,12 +1,22 @@
 import { View, svg } from "gpui-kit";
 import { h_flex } from "gpui-base";
-import { run, theme, spaces, panes } from "herdr";
+import { run, theme, spaces, panes, layout } from "herdr";
 
 // Buttons at the right of the top bar: Review (Redline) and Kubernetes (the kube mod).
 const stop = (_e, cx) => cx.stop_propagation(); // a press here doesn't drag the window
 
-// Kubernetes: go to this space's Kubernetes tab, or open one.
+// The kube panel docked in the layout (a block with props { docked: true }), if any.
+function dockedKube(n) {
+  if (!n) return null;
+  if (n.content?.mod === "kube" && n.content.props?.docked) return n;
+  for (const c of n.children ?? []) { const f = dockedKube(c); if (f) return f; }
+  return null;
+}
+
+// Kubernetes: show or hide the docked panel; without one, go to this space's Kubernetes tab, or open one.
 function openKube() {
+  const dock = dockedKube(layout());
+  if (dock) { run("layout.toggle", { id: dock.id }); return; }
   const space = spaces().find((s) => s.active);
   const tabs = new Set((space?.tabs ?? []).map((t) => t.id));
   const pane = panes().find((p) => p.mod === "kube" && tabs.has(p.tab));

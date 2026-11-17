@@ -12,7 +12,7 @@ A 184px block to the right of the tab bar (and of any other tab-bar buttons, suc
 
 - Hover: background `hover`, text `foreground`.
 - Review: `run("mod.open", { name: "redline" })`, which opens Redline's overlay, or closes it when open.
-- Kubernetes: looks in the active space's tabs for a pane whose `mod` is `kube`; selects that tab (`tab.select { id }`), else `tab.new { name: "Kubernetes", mod: "kube" }`.
+- Kubernetes: when `layout()` has a block with `content.mod` `kube` and `content.props.docked`, runs `layout.toggle { id }` on it. Otherwise it looks in the active space's tabs for a pane whose `mod` is `kube`; selects that tab (`tab.select { id }`), else `tab.new { name: "Kubernetes", mod: "kube" }`.
 - Presses on the buttons stop propagation, so the surrounding `window_drag` row doesn't move the window; elsewhere in the block dragging moves it.
 - No agent statuses.
 
@@ -20,7 +20,7 @@ A 184px block to the right of the tab bar (and of any other tab-bar buttons, suc
 
 - `mods/topbar-actions/main.js` (one `View`), `mod.json` `{ "place": "none" }`, `review.svg`, `kube.svg`.
 - Layout (a clone of `main`): the `tabs` block becomes `{ "id": "top-row", "type": "row", "size": { "px": 42 }, "resizable": false, "window_drag": true, "children": [ <tabs block with "size": { "weight": 1 }>, { "id": "topbar-actions", "type": "block", "size": { "px": 184 }, "content": { "mod": "topbar-actions" } } ] }`.
-- `herdr`: `run`, `theme`, `spaces`, `panes`.
+- `herdr`: `run`, `theme`, `spaces`, `panes`, `layout`.
 
 ## Watch out
 
@@ -33,5 +33,5 @@ A 184px block to the right of the tab bar (and of any other tab-bar buttons, suc
 
 - `herdr-app check mods/topbar-actions` passes.
 - Both buttons sit at the right end of the tab bar, on the bar's colour, with the bar's bottom border running under them.
-- Review opens and closes Redline; Kubernetes switches to an existing Kubernetes tab in this space, or opens one.
+- With a docked kube panel, Kubernetes hides and shows it. Review opens and closes Redline; without a docked panel, Kubernetes switches to an existing Kubernetes tab in this space, or opens one.
 - Dragging the empty part of the block moves the window; pressing a button doesn't.

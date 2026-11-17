@@ -1,6 +1,6 @@
 # Top bar actions
 
-Two buttons at the right end of Herdr's tab bar: **Review** opens the [Redline](https://github.com/iampedii/herdr-redline) code review, and **Kubernetes** goes to this space's Kubernetes tab (the [kube](../kube) mod), opening one if there is none.
+Two buttons at the right end of Herdr's tab bar: **Review** opens the [Redline](https://github.com/iampedii/herdr-redline) code review, and **Kubernetes** shows or hides the docked Kubernetes panel when your layout has one (a `kube` block with `"props": { "docked": true }`), or else goes to this space's Kubernetes tab (the [kube](../kube) mod), opening one if there is none.
 
 ![Top bar actions](preview.png)
 
