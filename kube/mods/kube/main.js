@@ -87,7 +87,10 @@ export default class Kube extends View {
 
   // ---- loading ----
 
-  loadContexts(cx) {
+  loadContexts(cx, attempt = 1) {
+    // A first read can be lost when the panel restarts mid-call (a layout switch): retry a few
+    // times rather than say "Loading clusters…" forever.
+    if (attempt < 4) cx.timer.after(20000, (cx) => { if (!this.ctx && !this.error) this.loadContexts(cx, attempt + 1); });
     cx.spawn(async (cx) => {
       try {
         const { list, current } = this.demo ? Demo.contexts() : await K.contexts();
