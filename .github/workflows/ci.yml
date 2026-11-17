@@ -46,7 +46,23 @@ jobs:
       - run: kind create cluster --wait 120s
       - run: make e2e
 
+  herdr-check:
+    name: herdr-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Herdr's own installer: latest release, checksum verified, into ~/.local.
+      - name: Install Herdr
+        run: |
+          curl -fsSL https://releases.herdr.dev/app/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - run: herdr-app --version
+      - run: make herdr-check
 
+  conventional-commits:
     name: conventional-commits
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
