@@ -76,7 +76,7 @@ export const kubectlPath = () => kubectlBin ?? "kubectl";
 // ---- contexts ----
 
 export async function contexts() {
-  const cfg = JSON.parse(await kubectl(["config", "view", "-o", "json"]));
+  const cfg = parseJSON(await kubectl(["config", "view", "-o", "json"]), "kubeconfig");
   const list = (cfg.contexts ?? []).map((c) => ({
     name: c.name, cluster: c.context?.cluster ?? "", namespace: c.context?.namespace ?? null, user: c.context?.user ?? "",
   }));
@@ -317,10 +317,50 @@ export const kindById = (id) => KINDS.find((k) => k.id === id) ?? KINDS[1];
 export const kindByName = (kind) => KINDS.find((k) => k.kind === kind);
 
 // Lists a kind. Secrets lose their values here: only key names are kept in memory.
+// Herdr caps a program's output at 8 MiB, and `kubectl get -o json` pretty-prints (~22 KB a
+// pod), so a big all-namespaces list was cut off mid-JSON. Ask the API server directly instead:
+// compact JSON (~9 KB a pod), PAGE objects at a time with its continue token.
+export let PAGE = 250; // let: tests page with small sizes
+export const setPage = (n) => { PAGE = n; };
+const MAX_PAGES = 400;
+
+export function listPath(k, namespace) {
+  const api = apiOf(k);
+  const base = api === "v1" ? "/api/v1" : `/apis/${api}`;
+  return !k.cluster && namespace ? `${base}/namespaces/${encodeURIComponent(namespace)}/${k.res}` : `${base}/${k.res}`;
+}
+
+// JSON from kubectl, with a clear error when it was cut short.
+export function parseJSON(text, what) {
+  try { return JSON.parse(text); }
+  catch (e) { throw new KubeError(`kubectl returned unreadable JSON for ${what} (${text.length} bytes): ${e.message}`); }
+}
+
+// Every object at an API path, a page at a time (managedFields dropped as they arrive).
+export async function rawList(context, path, params = {}, what = path) {
+  const items = [];
+  let cont = "";
+  for (let page = 0; page < MAX_PAGES; page++) {
+    // Built by hand: Herdr's QuickJS may not have URLSearchParams.
+    const q = Object.entries({ ...params, limit: String(PAGE), ...(cont ? { continue: cont } : {}) })
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join("&");
+    const out = parseJSON(await kubectl(["get", "--raw", `${path}?${q}`], { context, timeout: 40000 }), what);
+    for (const o of out.items ?? []) { if (o.metadata) delete o.metadata.managedFields; items.push(o); }
+    cont = out.metadata?.continue ?? "";
+    if (!cont) break;
+  }
+  return items;
+}
+
 export async function list(k, { context, namespace }) {
-  const scope = k.cluster ? [] : namespace ? ["-n", namespace] : ["-A"];
-  const out = JSON.parse(await kubectl(["get", k.res, ...scope, "-o", "json"], { context, timeout: 40000 }));
-  const items = (out.items ?? []).map((o) => {
+  let raw;
+  if (isDemo(context)) {
+    const scope = k.cluster ? [] : namespace ? ["-n", namespace] : ["-A"];
+    raw = parseJSON(await kubectl(["get", k.res, ...scope, "-o", "json"], { context, timeout: 40000 }), k.res).items ?? [];
+  } else {
+    raw = await rawList(context, listPath(k, namespace), {}, k.res);
+  }
+  const items = raw.map((o) => {
     const x = { apiVersion: o.apiVersion ?? apiOf(k), kind: o.kind ?? k.kind, ...o };
     return k.secret ? redactSecret(x) : x;
   });
@@ -342,14 +382,14 @@ export function redactSecret(o) {
 }
 
 export async function namespaces(context) {
-  const out = JSON.parse(await kubectl(["get", "namespaces", "-o", "json"], { context }));
+  const out = parseJSON(await kubectl(["get", "namespaces", "-o", "json"], { context }), "namespaces");
   return (out.items ?? []).map((n) => n.metadata.name).sort();
 }
 
 export async function eventsFor(o, context) {
   const ns = o.metadata?.namespace;
   const sel = `involvedObject.name=${o.metadata?.name},involvedObject.kind=${o.kind}`;
-  const out = JSON.parse(await kubectl(["get", "events", ...(ns ? ["-n", ns] : ["-A"]), "--field-selector", sel, "-o", "json"], { context }));
+  const out = parseJSON(await kubectl(["get", "events", ...(ns ? ["-n", ns] : ["-A"]), "--field-selector", sel, "-o", "json"], { context }), "events");
   return (out.items ?? []).sort((a, b) => ageMs(lastSeen(b)) - ageMs(lastSeen(a)));
 }
 
@@ -358,8 +398,12 @@ export async function podsFor(o, context) {
   const sel = o.kind === "Service" ? o.spec?.selector : o.spec?.selector?.matchLabels;
   if (!sel || !Object.keys(sel).length) return [];
   const label = Object.entries(sel).map(([k, v]) => `${k}=${v}`).join(",");
-  const out = JSON.parse(await kubectl(["get", "pods", "-n", o.metadata.namespace, "-l", label, "-o", "json"], { context }));
-  return (out.items ?? []).map((p) => ({ apiVersion: "v1", kind: "Pod", ...p }));
+  if (isDemo(context)) {
+    const out = parseJSON(await kubectl(["get", "pods", "-n", o.metadata.namespace, "-l", label, "-o", "json"], { context }), "pods");
+    return (out.items ?? []).map((p) => ({ apiVersion: "v1", kind: "Pod", ...p }));
+  }
+  const pods = await rawList(context, `/api/v1/namespaces/${encodeURIComponent(o.metadata.namespace)}/pods`, { labelSelector: label }, "pods");
+  return pods.map((p) => ({ apiVersion: "v1", kind: "Pod", ...p }));
 }
 
 // ---- usage (metrics-server) ----
@@ -395,7 +439,7 @@ export async function usage(kind, context, namespace) {
   const path = kind === "nodes"
     ? "/apis/metrics.k8s.io/v1beta1/nodes"
     : `/apis/metrics.k8s.io/v1beta1/${namespace ? `namespaces/${namespace}/` : ""}pods`;
-  const out = JSON.parse(await kubectl(["get", "--raw", path], { context }));
+  const out = parseJSON(await kubectl(["get", "--raw", path], { context }), "metrics");
   const m = new Map();
   for (const it of out.items ?? []) {
     const key = it.metadata?.namespace ? `${it.metadata.namespace}/${it.metadata.name}` : it.metadata?.name;
