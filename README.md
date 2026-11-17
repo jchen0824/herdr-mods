@@ -20,8 +20,11 @@ Or copy `<mod>/mods/<name>` into `~/.config/herdr-app/mods/` and run `herdr-app 
 ## Develop
 
 ```sh
-npm test   # Node's test runner, no dependencies
+make hooks   # once: enforce Conventional Commits locally
+make check   # mod structure, syntax, QuickJS rules, unit tests
 ```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md); coding agents start at [AGENTS.md](AGENTS.md).
 
 ## License
 
