@@ -32,6 +32,8 @@ implementing a feature does not imply them.
 ```sh
 make check                      # mod folder structure, JS syntax, QuickJS rules, unit tests
 make test                       # unit tests only (Node's test runner, no dependencies)
+make e2e                        # kube against a real, disposable cluster (CI uses kind); KUBE_E2E_CONTEXT
+make herdr-check                # herdr-app check on every mod (CI installs Herdr on Linux)
 make hooks                      # use .githooks: reject non-conventional commit subjects
 node scripts/check-commits.mjs --message 'fix(kube): retry loading clusters'
 herdr-app check ~/.config/herdr-app/mods/<name>   # Herdr's own check, on an installed copy
@@ -52,7 +54,11 @@ herdr-app check ~/.config/herdr-app/mods/<name>   # Herdr's own check, on an ins
   from, in Herdr's section order) and `preview.png` (the gallery picture).
 - `<folder>/keys.json`: optional bindings a user merges into theirs.
 - `kube/test/`: Node tests for the parts without UI (`kube.js`, `logs.js`); `herdr-stub.mjs`
-  stands in for the `herdr` module. UI code is verified in the app.
+  stands in for the `herdr` module and enforces Herdr's 8 MiB exec output cap (`cap.mjs`).
+  `kube/test/e2e/` runs the same code with the real kubectl against a disposable cluster
+  (kind in CI's `e2e` job); it creates and deletes the `herdr-kube-e2e` namespace. CI also
+  installs Herdr on Linux and runs `herdr-app check` on every mod; the rest of the UI is
+  verified in the app.
 - `scripts/check-mods.mjs` checks each folder is a complete entry, every `.js` parses,
   `??` is never mixed with `||`/`&&` without parentheses (QuickJS rejects it), and
   Herdr's generated `jsconfig.json`/`*.d.ts` are not committed.

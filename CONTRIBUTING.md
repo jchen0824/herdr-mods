@@ -17,6 +17,20 @@ To try a mod, copy `<folder>/mods/<name>` into `~/.config/herdr-app/mods/`, run
 herdr-app do tab.new --name Demo --mod kube --props '{"demo":true}'
 ```
 
+## End-to-end tests
+
+`make e2e` runs the kube data layer with the real `kubectl` against a cluster, through a
+stand-in that enforces Herdr's 8 MiB output cap. Use only a disposable cluster: it creates
+more than 8 MiB of ConfigMaps in a `herdr-kube-e2e` namespace and deletes it afterwards.
+
+```sh
+kind create cluster
+make e2e                      # KUBE_E2E_CONTEXT defaults to kind-kind
+kind delete cluster
+```
+
+CI's `e2e` job does the same on every pull request and push to `main`.
+
 ## Pull requests
 
 Create a branch such as `feat/kube-proxy` or `fix/topbar-gap`. Keep each PR focused.
@@ -32,6 +46,6 @@ commit subject.
 
 ## Making CI a merge gate
 
-The `check` and `conventional-commits` workflow jobs run on pull requests. To make
+The `check`, `e2e`, `herdr-check` and `conventional-commits` workflow jobs run on pull requests. To make
 them required, add a ruleset for `main` that requires them and pull requests, and
 blocks force pushes and deletion. Workflow files alone don't enforce anything.
