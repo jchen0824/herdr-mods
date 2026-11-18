@@ -13,3 +13,9 @@ export async function exec(cmd, args) {
 }
 export const home = () => "/home/test";
 export const checking = () => false;
+// readTextFile serves what a test puts in `files` (path -> text); anything else is missing.
+export const files = {};
+export async function readTextFile(path) {
+  if (!(path in files)) throw new Error(`no such file: ${path}`);
+  return files[path];
+}

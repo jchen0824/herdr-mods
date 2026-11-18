@@ -16,3 +16,5 @@ export function exec(cmd, args, { timeout = 30000 } = {}) {
 }
 export const home = () => homedir();
 export const checking = () => false;
+import { readFile } from "node:fs/promises";
+export const readTextFile = (path) => readFile(path, "utf8");
