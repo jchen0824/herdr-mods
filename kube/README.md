@@ -28,7 +28,7 @@ An OpenLens-style Kubernetes panel for the [Herdr](https://herdr.dev) desktop ap
   - **Open in terminal** for plain `kubectl logs -f`
 - **Signing in.** When a cluster's sign-in has expired the panel says so and helps:
   - **AWS (EKS):** it shows which AWS profile, region and role the cluster uses (from your kubeconfig), lets you pick another profile from `~/.aws/config` (marking SSO profiles and their SSO session, and warning when the one you pick won't refresh this cluster), and **Sign in with AWS SSO** opens a tab running `aws sso login --profile <profile>`. With no SSO profiles yet, **Set up SSO** runs `aws configure sso`.
-  - **GKE:** **Sign in with gcloud** opens a tab running `gcloud auth login`.
+  - **GKE:** **Sign in with gcloud** opens a tab running `gcloud auth login`, or `gcloud auth application-default login` for clusters that use application default credentials.
   - Either way the panel retries every 5 s for 3 minutes, so it comes back by itself once you finish in the browser.
 - **Actions:** Logs, Shell (`bash`, else `sh`), Port-forward (from container and service ports), Describe, Restart (Deployments, StatefulSets, DaemonSets) and Scale (Deployments, StatefulSets). Restart and scale ask first; on a production cluster the confirmation is red and names the cluster.
 

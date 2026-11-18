@@ -18,7 +18,10 @@ export class KubeError extends Error {
     // credentials at all. Both are fixed by signing in, so both count as a sign-in problem.
     this.aws = !this.plugin && /Error loading SSO Token|SSO session associated with this profile|Error when retrieving token from sso|Token has expired and refresh failed|Unable to locate credentials|ExpiredToken|security token included in the request is (expired|invalid)|aws sso login|config profile \(.*\) could not be found/i.test(t);
     this.profileMissing = this.aws && /config profile \((.*)\) could not be found/i.test(t);
-    this.auth = !this.plugin && (this.aws || /gcloud auth login|Reauthentication|refresh.*token|invalid_grant|Unauthorized|You must be logged in|token.*expired/i.test(t));
+    // gcloud (through gke-gcloud-auth-plugin, which wraps gcloud's own message): an expired or
+    // missing sign-in, or missing application default credentials.
+    this.gcloud = !this.plugin && !this.aws && /gcloud auth (application-default )?login|gcloud\.config\.config-helper|Reauthentication failed|problem refreshing your current auth tokens|do not currently have an active account selected|could not find default credentials/i.test(t);
+    this.auth = !this.plugin && (this.aws || this.gcloud || /Reauthentication|refresh.*token|invalid_grant|Unauthorized|You must be logged in|token.*expired/i.test(t));
     this.missing = !this.plugin && /isn't installed|not found/i.test(t) && /kubectl/.test(t);
   }
 }
@@ -109,9 +112,34 @@ export function authOf(exec) {
       cluster: after("--cluster-name", "-i", "--cluster-id"),
     };
   }
-  if (cmd === "gke-gcloud-auth-plugin" || cmd === "gcloud") return { provider: "gcloud" };
+  // gcloud container clusters get-credentials writes command gke-gcloud-auth-plugin; with
+  // --use_application_default_credentials it signs in with application default credentials.
+  if (cmd === "gke-gcloud-auth-plugin" || cmd === "gcloud") return { provider: "gcloud", adc: args.includes("--use_application_default_credentials") };
   return { provider: cmd };
 }
+
+// What the error screen offers for a sign-in error on a cluster with this auth: the provider
+// ("aws", "gcloud" or null for an unknown one), its title, and for gcloud the command to run
+// (AWS's depends on the profile picked: awsSignIn). null when the error isn't about signing in.
+export function signInFor(e, auth) {
+  if (!e?.auth) return null;
+  const text = String(e.message ?? "");
+  if (e.aws || auth?.provider === "aws") {
+    const title = e.profileMissing ? "This cluster's AWS profile isn't set up"
+      : /Unable to locate credentials/i.test(text) ? "No AWS credentials for this cluster"
+      : "Your AWS SSO session has expired";
+    return { provider: "aws", title, profile: auth?.profile ?? null };
+  }
+  if (e.gcloud || auth?.provider === "gcloud") {
+    const adc = Boolean(auth?.adc) || /application-default|could not find default credentials/i.test(text);
+    const title = /do not currently have an active account/i.test(text) ? "You're not signed in to gcloud"
+      : adc ? "Your gcloud application default credentials are missing or expired"
+      : "Your gcloud sign-in has expired";
+    return { provider: "gcloud", title, argv: adc ? ["gcloud", "auth", "application-default", "login"] : ["gcloud", "auth", "login"] };
+  }
+  return { provider: null, title: "Your cluster sign-in has expired" };
+}
+export const awsSignIn = (profile) => ["aws", "sso", "login", "--profile", profile];
 
 // Profiles in ~/.aws/config: [default], [profile NAME] and [sso-session NAME] sections. An SSO
 // profile names an sso_session (current format) or carries sso_start_url itself (legacy).

@@ -222,7 +222,7 @@ export default class Kube extends View {
           this.ctxErrors = errs;
           if (!ok.length) {
             this.error = Object.values(errs)[0];
-            if (this.error?.aws || this.authOf(this.ctx)?.provider === "aws") this.loadAws(cx);
+            if (K.signInFor(this.error, this.authOf(this.ctx))?.provider === "aws") this.loadAws(cx);
           } else {
             this.signingIn = 0;
             this.aws = null;
@@ -660,12 +660,11 @@ export default class Kube extends View {
   notice(t) {
     const e = this.error;
     const a = this.authOf(this.ctx);
-    const aws = Boolean(e?.aws || (e?.auth && a?.provider === "aws"));
-    const gcloud = !aws && Boolean(e?.auth) && (a?.provider === "gcloud" || /gcloud|gke/i.test(msg(e)));
+    // One decision (K.signInFor, tested on its own) says which sign-in to offer.
+    const sign = K.signInFor(e, a);
+    const aws = sign?.provider === "aws";
     const auth = Boolean(e?.auth);
-    const title = aws
-      ? (e?.profileMissing ? "This cluster's AWS profile isn't set up" : /Unable to locate credentials/i.test(msg(e)) ? "No AWS credentials for this cluster" : "Your AWS SSO session has expired")
-      : auth ? "Your cluster sign-in has expired" : e?.plugin ? "kubectl can't find its sign-in helper" : e?.missing ? "kubectl isn't installed" : "Can't reach the cluster";
+    const title = sign?.title ?? (e?.plugin ? "kubectl can't find its sign-in helper" : e?.missing ? "kubectl isn't installed" : "Can't reach the cluster");
     const pick = this.aws?.profiles?.find((p) => p.name === this.aws?.pick);
     const noProfiles = aws && Array.isArray(this.aws?.profiles) && !this.aws.profiles.some((p) => p.sso);
     return v_flex().flex_1().items_center().justify_center().p(24).gap(10)
@@ -678,14 +677,14 @@ export default class Kube extends View {
       .child(h_flex().gap(8).pt(6).flex_wrap().justify_center()
         .when(aws && !noProfiles, (el) => el.child(this.button(t, "kube-aws-login", "Sign in with AWS SSO", Boolean(pick?.sso), (cx) => {
           if (!pick?.sso) return;
-          this.signIn(`aws sso login · ${pick.name}`, ["aws", "sso", "login", "--profile", pick.name], cx);
+          this.signIn(`aws sso login · ${pick.name}`, K.awsSignIn(pick.name), cx);
         })))
         .when(noProfiles, (el) => el.child(this.button(t, "kube-aws-setup", "Set up SSO", true, (cx) => {
           run("tab.new", { name: "aws configure sso", argv: ["aws", "configure", "sso"] });
           this.aws = null; cx.notify();
         })))
-        .when(gcloud, (el) => el.child(this.button(t, "kube-login", "Sign in with gcloud", true, (cx) => {
-          this.signIn("gcloud auth login", ["gcloud", "auth", "login"], cx);
+        .when(sign?.provider === "gcloud", (el) => el.child(this.button(t, "kube-login", "Sign in with gcloud", true, (cx) => {
+          this.signIn(sign.argv.join(" "), sign.argv, cx);
         })))
         .child(this.button(t, "kube-copy", this.copied ? "Copied" : "Copy error", false, (cx) => this.copyError(cx)))
         .child(this.button(t, "kube-retry", "Retry", !auth, (cx) => { this.error = null; this.aws = null; this.refresh(cx); cx.notify(); })));
