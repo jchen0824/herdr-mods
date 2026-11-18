@@ -1,6 +1,6 @@
 // Kubernetes data for the kube mod: kubectl calls, the resource kinds OpenLens shows, their
 // table columns, and small formatters. Nothing here draws.
-import { exec, home, checking } from "herdr";
+import { exec, home, checking, readTextFile } from "herdr";
 import * as Demo from "./demo.js";
 
 // ---- kubectl ----
@@ -14,7 +14,11 @@ export class KubeError extends Error {
     super(t || "kubectl failed");
     // A credential plugin kubectl can't find (gke-gcloud-auth-plugin) is a setup problem, not an expired sign-in.
     this.plugin = /executable (\S+) not found|credential plugin that is not installed/i.test(t);
-    this.auth = !this.plugin && /gcloud auth login|Reauthentication|refresh.*token|invalid_grant|Unauthorized|You must be logged in|token.*expired/i.test(t);
+    // AWS (botocore's messages): an expired or missing IAM Identity Center (SSO) session, or no
+    // credentials at all. Both are fixed by signing in, so both count as a sign-in problem.
+    this.aws = !this.plugin && /Error loading SSO Token|SSO session associated with this profile|Error when retrieving token from sso|Token has expired and refresh failed|Unable to locate credentials|ExpiredToken|security token included in the request is (expired|invalid)|aws sso login|config profile \(.*\) could not be found/i.test(t);
+    this.profileMissing = this.aws && /config profile \((.*)\) could not be found/i.test(t);
+    this.auth = !this.plugin && (this.aws || /gcloud auth login|Reauthentication|refresh.*token|invalid_grant|Unauthorized|You must be logged in|token.*expired/i.test(t));
     this.missing = !this.plugin && /isn't installed|not found/i.test(t) && /kubectl/.test(t);
   }
 }
@@ -34,9 +38,9 @@ async function kubePath() {
   try {
     // `herdr-app check` runs init for real: don't start an interactive shell there.
     if (checking()) throw new Error("checking");
-    // Where the interactive shell finds the plugin, in case it's somewhere else. No terminal
+    // Where the interactive shell finds the sign-in helpers (gcloud's, aws), in case it's somewhere else. No terminal
     // input, so a shell that wants one can't wait for it.
-    const sh = await exec("/bin/sh", ["-c", 'p=$("${SHELL:-/bin/zsh}" -ic "command -v gke-gcloud-auth-plugin" </dev/null 2>/dev/null | tail -n 1); [ -n "$p" ] && dirname "$p"; printf "%s" "$PATH"'], { timeout: 8000 });
+    const sh = await exec("/bin/sh", ["-c", 'for c in gke-gcloud-auth-plugin aws aws-iam-authenticator; do p=$("${SHELL:-/bin/zsh}" -ic "command -v $c" </dev/null 2>/dev/null | tail -n 1); case "$p" in /*) dirname "$p";; esac; done; printf "%s" "$PATH"'], { timeout: 8000 });
     const lines = sh.stdout.split("\n");
     const base = lines.pop() ?? "";
     for (const l of lines) if (l.startsWith("/")) dirs.unshift(l.trim());
@@ -77,10 +81,72 @@ export const kubectlPath = () => kubectlBin ?? "kubectl";
 
 export async function contexts() {
   const cfg = parseJSON(await kubectl(["config", "view", "-o", "json"]), "kubeconfig");
+  const users = Object.fromEntries((cfg.users ?? []).map((u) => [u.name, u.user ?? {}]));
   const list = (cfg.contexts ?? []).map((c) => ({
     name: c.name, cluster: c.context?.cluster ?? "", namespace: c.context?.namespace ?? null, user: c.context?.user ?? "",
+    auth: authOf(users[c.context?.user]?.exec),
   }));
   return { list, current: cfg["current-context"] ?? null };
+}
+
+// How a kubeconfig user signs in, from its exec plugin: "aws" (aws eks get-token or
+// aws-iam-authenticator, with the AWS profile, region and role it uses), "gcloud", another
+// plugin by name, or null for certificates and static tokens.
+// aws eks update-kubeconfig writes: command aws, args [--region R, eks, get-token,
+// --cluster-name C, --output json, (--role ARN)], env [AWS_PROFILE=P] when a profile was used.
+export function authOf(exec) {
+  if (!exec?.command) return null;
+  const cmd = String(exec.command).split(/[\\/]/).pop();
+  const args = (exec.args ?? []).map(String);
+  const env = Object.fromEntries((exec.env ?? []).map((e) => [e.name, e.value]));
+  const after = (...flags) => { for (const f of flags) { const i = args.indexOf(f); if (i >= 0 && i + 1 < args.length) return args[i + 1]; } return null; };
+  if (cmd === "aws" || cmd === "aws-iam-authenticator") {
+    return {
+      provider: "aws",
+      profile: env.AWS_PROFILE ?? after("--profile") ?? null,
+      region: after("--region") ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? null,
+      role: after("--role", "--role-arn", "-r"),
+      cluster: after("--cluster-name", "-i", "--cluster-id"),
+    };
+  }
+  if (cmd === "gke-gcloud-auth-plugin" || cmd === "gcloud") return { provider: "gcloud" };
+  return { provider: cmd };
+}
+
+// Profiles in ~/.aws/config: [default], [profile NAME] and [sso-session NAME] sections. An SSO
+// profile names an sso_session (current format) or carries sso_start_url itself (legacy).
+// Signing in to one profile refreshes every profile of the same SSO session.
+export function parseAwsConfig(text) {
+  const sections = [];
+  let cur = null;
+  for (const raw of String(text ?? "").split(/\r?\n/)) {
+    const line = raw.replace(/\s[#;].*$/, "").trim();
+    if (!line || line.startsWith("#") || line.startsWith(";")) continue;
+    const head = /^\[\s*(?:(profile|sso-session)\s+)?([^\]]+?)\s*\]$/.exec(line);
+    if (head) { cur = { type: head[1] ?? (head[2] === "default" ? "profile" : "other"), name: head[2], keys: {} }; sections.push(cur); continue; }
+    const kv = /^([^=]+?)\s*=\s*(.*)$/.exec(line);
+    if (kv && cur) cur.keys[kv[1].trim()] = kv[2].trim();
+  }
+  const sessions = Object.fromEntries(sections.filter((x) => x.type === "sso-session").map((x) => [x.name, x.keys]));
+  return sections.filter((x) => x.type === "profile").map((x) => {
+    const k = x.keys, session = k.sso_session ?? null;
+    return {
+      name: x.name,
+      sso: Boolean(session || k.sso_start_url),
+      session,
+      startUrl: session ? sessions[session]?.sso_start_url ?? null : k.sso_start_url ?? null,
+      account: k.sso_account_id ?? null,
+      role: k.sso_role_name ?? null,
+      region: k.region ?? null,
+    };
+  });
+}
+
+// This machine's AWS profiles (~/.aws/config; AWS_CONFIG_FILE isn't followed). Empty when there
+// is no config. Only the config file is read: never ~/.aws/credentials.
+export async function awsProfiles(context) {
+  if (isDemo(context)) return parseAwsConfig(Demo.AWS_CONFIG);
+  try { return parseAwsConfig(await readTextFile(`${home()}/.aws/config`)); } catch { return []; }
 }
 
 // A readable name: gke_<project>_<location>_<cluster> -> "cluster · location".

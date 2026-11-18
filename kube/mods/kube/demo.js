@@ -10,7 +10,41 @@ const hash = (s) => [...s].reduce((n, c) => (n * 31 + c.charCodeAt(0)) >>> 0, 7)
 const ALPHA = "bcdfghjklmnpqrstvwxz2456789";
 const suffix = (s, n = 5) => { let h = hash(s), out = ""; for (let i = 0; i < n; i++) { out += ALPHA[h % ALPHA.length]; h = Math.floor(h / ALPHA.length) || hash(s + i); } return out; };
 
-export const CONTEXTS = ["demo:gke_acme_us-central1_shop-prod", "demo:gke_acme_us-central1_shop-staging", "demo:kind-dev"];
+// The EKS cluster's SSO session has expired: it shows the AWS sign-in screen.
+const EKS = "demo:arn:aws:eks:us-east-1:123456789012:cluster/payments-eks";
+export const CONTEXTS = ["demo:gke_acme_us-central1_shop-prod", "demo:gke_acme_us-central1_shop-staging", "demo:kind-dev", EKS];
+
+// A made-up ~/.aws/config: two SSO profiles sharing one session, one legacy SSO profile, and
+// a static-key profile.
+export const AWS_CONFIG = `[default]
+region = us-east-1
+
+[profile payments-admin]
+sso_session = acme
+sso_account_id = 123456789012
+sso_role_name = AdministratorAccess
+region = us-east-1
+
+[profile payments-readonly]
+sso_session = acme
+sso_account_id = 123456789012
+sso_role_name = ReadOnlyAccess
+region = us-east-1
+
+[profile sandbox]
+sso_start_url = https://acme-sandbox.awsapps.com/start
+sso_region = us-west-2
+sso_account_id = 210987654321
+sso_role_name = Developer
+
+[profile ci-bot]
+region = eu-west-1
+
+[sso-session acme]
+sso_start_url = https://acme.awsapps.com/start
+sso_region = us-east-1
+sso_registration_scopes = sso:account:access
+`;
 
 // Per cluster: namespace -> deployments [name, replicas, cpu (m), mem (Mi), trouble?]
 const APPS = {
@@ -165,6 +199,9 @@ function logs(ctx, args) {
 
 // The answer kubectl would print for these arguments on demo context `ctx`.
 export function kubectl(ctx, args) {
+  if (ctx === EKS) {
+    throw new Error("E1118 12:00:00.000000 memcache.go:265] couldn't get current server API group list: Get \"https://ABC123.gr7.us-east-1.eks.amazonaws.com/api\": getting credentials: exec: executable aws failed with exit code 255\n\nError loading SSO Token: Token for acme does not exist");
+  }
   const a = args.filter((x) => !x.startsWith("--request-timeout"));
   if (a.includes("logs")) return logs(ctx, a);
   if (a.includes("rollout") || a.includes("scale")) return "ok (demo: nothing changed)\n";
@@ -192,5 +229,9 @@ export function kubectl(ctx, args) {
 }
 
 export function contexts() {
-  return { list: CONTEXTS.map((name) => ({ name, cluster: name, namespace: null, user: "demo" })), current: CONTEXTS[0] };
+  const eksAuth = { provider: "aws", profile: "payments-admin", region: "us-east-1", role: null, cluster: "payments-eks" };
+  return {
+    list: CONTEXTS.map((name) => ({ name, cluster: name, namespace: null, user: "demo", auth: name === EKS ? eksAuth : { provider: "gcloud" } })),
+    current: CONTEXTS[0],
+  };
 }

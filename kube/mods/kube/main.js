@@ -50,7 +50,9 @@ export default class Kube extends View {
     this.confirm = null;          // { title, verb, run }
     this.scaling = false;
     this.width = 1200;
-    this.open = { ctx: false, ns: false };
+    this.open = { ctx: false, ns: false, aws: false };
+    this.aws = null;              // { profiles, pick } once an AWS sign-in error is shown
+    this.signingIn = 0;           // when a sign-in tab was opened: retry until the cluster answers
     this.focusH = cx.focus_handle();
     this.input = InputState.new({ placeholder: "Search…" });
     this.input.on("change", (_e, cx) => { this.q = this.input.value().trim().toLowerCase(); cx.notify(); });
@@ -131,6 +133,9 @@ export default class Kube extends View {
         try { saved = JSON.parse(store.get("kube.ctxs") ?? "[]"); } catch { /* none */ }
         if (!saved.length && store.get("kube.ctx")) saved = [store.get("kube.ctx")];
         saved = saved.filter((n) => list.some((c) => c.name === n));
+        // Demo props can name the starting cluster: { demo: { context: "demo:..." } }.
+        const demoStart = this.demo && props()?.demo?.context;
+        if (demoStart && list.some((c) => c.name === demoStart)) saved = [demoStart];
         const pick = saved.length ? saved : [current ?? list[0]?.name].filter(Boolean);
         if (!pick.length) this.error = new K.KubeError("No clusters in your kubeconfig (~/.kube/config).");
         else this.useContexts(pick, cx);
@@ -215,8 +220,12 @@ export default class Kube extends View {
           const errs = {};
           results.forEach((r, i) => { if (r.status === "rejected") errs[sel[i]] = r.reason instanceof K.KubeError ? r.reason : new K.KubeError(msg(r.reason)); });
           this.ctxErrors = errs;
-          if (!ok.length) this.error = Object.values(errs)[0];
-          else {
+          if (!ok.length) {
+            this.error = Object.values(errs)[0];
+            if (this.error?.aws || this.authOf(this.ctx)?.provider === "aws") this.loadAws(cx);
+          } else {
+            this.signingIn = 0;
+            this.aws = null;
             this.items = ok.flatMap((v) => v.items);
             this.hasUse = ok.some((v) => v.use);
             this.error = null;
@@ -566,7 +575,8 @@ export default class Kube extends View {
     return v_flex().flex_1().min_w(0).h_full()
       .child(header)
       .when(Boolean(this.error && this.items.length), (e) => e.child(div().px(14).py(6).text_size(11.5).text_color(t.ansi1).bg(t.surface).border_b(1).border_color(t.border).child(`Refresh failed: ${msg(this.error)}`)))
-      .children(Object.entries(this.ctxErrors).map(([n, err]) => div().px(14).py(6).text_size(11.5).text_color(t.ansi3).bg(t.surface).border_b(1).border_color(t.border)
+      // One cluster failing while others answer; when all failed, the notice says it instead.
+      .children((this.error ? [] : Object.entries(this.ctxErrors)).map(([n, err]) => div().px(14).py(6).text_size(11.5).text_color(t.ansi3).bg(t.surface).border_b(1).border_color(t.border)
         .child(`${K.contextLabel(n).title}: ${msg(err).split("\n")[0]}`)))
       .child(body);
   }
@@ -575,18 +585,110 @@ export default class Kube extends View {
     return div().flex_1().flex().items_center().justify_center().text_color(t.dim).child(text);
   }
 
+  // ---- signing in ----
+
+  authOf(name) { return this.ctxs.find((c) => c.name === name)?.auth ?? null; }
+
+  // Read ~/.aws/config once an AWS sign-in is needed; pick the cluster's own profile, else the
+  // first SSO profile.
+  loadAws(cx) {
+    if (this.aws) return;
+    this.aws = { profiles: null, pick: null };
+    const ctx = this.ctx;
+    cx.spawn(async (cx) => {
+      const profiles = await K.awsProfiles(ctx);
+      const want = this.authOf(ctx)?.profile;
+      this.aws = { profiles, pick: (profiles.find((p) => p.name === want) ?? profiles.find((p) => p.sso) ?? profiles[0])?.name ?? want ?? null };
+      cx.notify();
+    });
+  }
+
+  // A sign-in runs in a terminal tab (it may open a browser). Meanwhile retry every 5 s for
+  // 3 minutes, so the panel comes back by itself once the sign-in finishes.
+  signIn(name, argv, cx) {
+    run("tab.new", { name, argv });
+    const started = this.signingIn = Date.now();
+    cx.timer.every(5000, (cx) => {
+      if (this.signingIn !== started) return;
+      if (Date.now() - started > 180000) { this.signingIn = 0; cx.notify(); return; }
+      if (this.error && !this.busy) this.refresh(cx, true);
+    });
+    cx.notify();
+  }
+
+  awsBox(t) {
+    const a = this.authOf(this.ctx) ?? {};
+    const profiles = this.aws?.profiles;
+    const pick = profiles?.find((p) => p.name === this.aws?.pick) ?? null;
+    const mine = profiles?.find((p) => p.name === a.profile) ?? null;
+    const uses = a.profile ? `This cluster signs in with AWS profile ${a.profile}` : "This cluster signs in with your default AWS profile";
+    const where = [a.region, a.role ? `role ${a.role.split("/").pop()}` : null].filter(Boolean).join(" · ");
+    const rows = (profiles ?? []).map((p) => h_flex().id(`kube-aws-${p.name}`).h(40).flex_none().px(8).gap(8).items_center().rounded(5).cursor_pointer()
+      .when(p.name === this.aws?.pick, (e) => e.bg(t.selected)).hover((st) => st.bg(t.hover))
+      .on_click((_e, cx) => { this.aws.pick = p.name; this.open.aws = false; cx.notify(); })
+      .child(v_flex().flex_1().min_w(0)
+        .child(div().truncate().text_size(12.5).text_color(t.foreground).child(p.name))
+        .child(div().truncate().text_size(10.5).text_color(t.dim).child([p.session ? `session ${p.session}` : p.startUrl ? "legacy SSO" : "no SSO", p.account, p.role].filter(Boolean).join(" · "))))
+      .when(p.name === a.profile, (e) => e.child(div().px(5).rounded(4).bg(t.raised).text_size(9.5).text_color(t.muted).child("CLUSTER")))
+      .child(div().px(5).rounded(4).text_size(9.5).font_semibold().bg(p.sso ? t.accent : t.raised).text_color(p.sso ? t.accent_foreground : t.dim).child(p.sso ? "SSO" : "KEYS")));
+    const list = v_flex().id("kube-aws-card").w(340).h(Math.min(360, 40 + Math.max(1, rows.length) * 41)).p(5).gap(4).rounded(8)
+      .bg(t.popover).border_1().border_color(t.border).shadow_md()
+      .child(div().px(8).pt(4).text_size(10.5).text_color(t.dim).child("AWS PROFILES · ~/.aws/config"))
+      .child(div().flex_1().min_h(0).relative()
+        .child(v_flex().id("kube-aws-list").size_full().overflow_y_scroll().gap(1).children(rows))
+        .child(Scrollbar.vertical("kube-aws-list").absolute().inset_0()));
+    const warn = !pick ? null
+      : !pick.sso ? `${pick.name} isn't an SSO profile: sign in to it another way (aws configure).`
+      : mine && pick.name !== mine.name && (pick.session ?? pick.startUrl) !== (mine.session ?? mine.startUrl)
+        ? `${pick.name} uses a different SSO session from ${mine.name}, so signing in to it won't refresh this cluster.` : null;
+    return v_flex().gap(8).items_center().w_full().max_w(560)
+      .child(div().text_size(12).text_color(t.muted).child(`${uses}${where ? ` (${where})` : ""}.`))
+      .child(profiles == null ? div().text_size(12).text_color(t.dim).child("Reading ~/.aws/config…")
+        : !profiles.length ? div().text_size(12).text_color(t.muted).child("No profiles in ~/.aws/config yet. Set one up with aws configure sso, then sign in.")
+        : h_flex().gap(8).items_center()
+          .child(div().text_size(12).text_color(t.dim).child("Profile"))
+          .child(Popover.new("kube-aws-menu").open(this.open.aws).on_open_change((o, cx) => { this.open.aws = o; cx.notify(); })
+            .trigger(h_flex().id("kube-aws-pick").h(30).min_w(220).px(10).gap(8).items_center().rounded(6).cursor_pointer()
+              .border_1().border_color(this.open.aws ? t.accent : t.border).bg(t.background).hover((st) => st.bg(t.hover))
+              .child(div().flex_1().min_w(0).truncate().text_size(12.5).child(pick?.name ?? this.aws?.pick ?? "Choose a profile"))
+              .when(Boolean(pick?.session), (e) => e.child(div().text_size(10.5).text_color(t.dim).child(pick.session)))
+              .child(div().text_size(9).text_color(t.dim).child("▾")))
+            .content(list)))
+      .when(Boolean(warn), (e) => e.child(div().text_size(11.5).text_color(t.ansi3).child(warn)));
+  }
+
   notice(t) {
     const e = this.error;
-    const auth = e?.auth;
+    const a = this.authOf(this.ctx);
+    const aws = Boolean(e?.aws || (e?.auth && a?.provider === "aws"));
+    const gcloud = !aws && Boolean(e?.auth) && (a?.provider === "gcloud" || /gcloud|gke/i.test(msg(e)));
+    const auth = Boolean(e?.auth);
+    const title = aws
+      ? (e?.profileMissing ? "This cluster's AWS profile isn't set up" : /Unable to locate credentials/i.test(msg(e)) ? "No AWS credentials for this cluster" : "Your AWS SSO session has expired")
+      : auth ? "Your cluster sign-in has expired" : e?.plugin ? "kubectl can't find its sign-in helper" : e?.missing ? "kubectl isn't installed" : "Can't reach the cluster";
+    const pick = this.aws?.profiles?.find((p) => p.name === this.aws?.pick);
+    const noProfiles = aws && Array.isArray(this.aws?.profiles) && !this.aws.profiles.some((p) => p.sso);
     return v_flex().flex_1().items_center().justify_center().p(24).gap(10)
-      .child(div().text_size(15).font_semibold().child(auth ? "Your cluster sign-in has expired" : e?.plugin ? "kubectl can't find its sign-in helper" : e?.missing ? "kubectl isn't installed" : "Can't reach the cluster"))
+      .child(div().text_size(15).font_semibold().child(title))
+      .when(aws, (el) => el.child(this.awsBox(t)))
       .child(div().max_w(560).text_size(12).text_color(t.muted).font_family(settings().font_family ?? "JetBrains Mono").child(msg(e)))
-      .child(h_flex().gap(8).pt(6)
-        .when(auth && /gcloud|gke/i.test(msg(e)), (el) => el.child(this.button(t, "kube-login", "Sign in with gcloud", true, () => {
-          run("tab.new", { name: "gcloud auth login", argv: ["gcloud", "auth", "login"] });
+      .when(Boolean(this.signingIn), (el) => el.child(h_flex().gap(6).items_center().text_size(12).text_color(t.muted)
+        .child(svg(ICON("spinner")).size(13).text_color(t.accent).spin(900))
+        .child("Waiting for the sign-in to finish… retrying every 5 s")))
+      .child(h_flex().gap(8).pt(6).flex_wrap().justify_center()
+        .when(aws && !noProfiles, (el) => el.child(this.button(t, "kube-aws-login", "Sign in with AWS SSO", Boolean(pick?.sso), (cx) => {
+          if (!pick?.sso) return;
+          this.signIn(`aws sso login · ${pick.name}`, ["aws", "sso", "login", "--profile", pick.name], cx);
+        })))
+        .when(noProfiles, (el) => el.child(this.button(t, "kube-aws-setup", "Set up SSO", true, (cx) => {
+          run("tab.new", { name: "aws configure sso", argv: ["aws", "configure", "sso"] });
+          this.aws = null; cx.notify();
+        })))
+        .when(gcloud, (el) => el.child(this.button(t, "kube-login", "Sign in with gcloud", true, (cx) => {
+          this.signIn("gcloud auth login", ["gcloud", "auth", "login"], cx);
         })))
         .child(this.button(t, "kube-copy", this.copied ? "Copied" : "Copy error", false, (cx) => this.copyError(cx)))
-        .child(this.button(t, "kube-retry", "Retry", !auth, (cx) => { this.error = null; this.refresh(cx); cx.notify(); })));
+        .child(this.button(t, "kube-retry", "Retry", !auth, (cx) => { this.error = null; this.aws = null; this.refresh(cx); cx.notify(); })));
   }
 
   // No clipboard API for mods: hand the text to pbcopy (macOS) or wl-copy/xclip.
