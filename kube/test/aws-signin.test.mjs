@@ -7,6 +7,7 @@ import fc from "fast-check";
 import * as K from "../mods/kube/kube.js";
 import * as Demo from "../mods/kube/demo.js";
 import { files } from "./herdr-stub.mjs";
+import { AWS, GCLOUD, OTHER, EKS_USER } from "./signin-fixtures.mjs";
 
 // What `aws eks update-kubeconfig --name payments-eks --region us-east-1 --role-arn ...
 // --profile payments-admin` writes (awscli/customizations/eks/update_kubeconfig.py).
@@ -26,7 +27,6 @@ test("an EKS kubeconfig user names its AWS profile, region, role and cluster", (
   // Without --profile the entry has no env: the default profile signs in.
   assert.equal(K.authOf({ ...updateKubeconfig, env: undefined }).profile, null);
   assert.equal(K.authOf({ command: "/usr/local/bin/aws-iam-authenticator", args: ["token", "-i", "c1", "--profile", "ops"] }).profile, "ops");
-  assert.deepEqual(K.authOf({ command: "gke-gcloud-auth-plugin" }), { provider: "gcloud" });
   assert.equal(K.authOf(undefined), null);
 });
 
@@ -85,4 +85,37 @@ test("the demo EKS cluster fails with an SSO error and says which profile it use
   const eks = list.find((c) => c.name.includes("eks"));
   assert.equal(eks.auth.profile, "payments-admin");
   await assert.rejects(K.kubectl(["get", "--raw", "/api/v1/pods"], { context: eks.name }), (e) => e.aws && e.auth);
+});
+
+test("each AWS sign-in error gets the right title, and the cluster's profile", () => {
+  const eks = K.authOf(EKS_USER);
+  const titles = {
+    noToken: "Your AWS SSO session has expired", expired: "Your AWS SSO session has expired",
+    refresh: "Your AWS SSO session has expired", stsExpired: "Your AWS SSO session has expired",
+    noCreds: "No AWS credentials for this cluster", noProfile: "This cluster's AWS profile isn't set up",
+  };
+  for (const [name, text] of Object.entries(AWS)) {
+    const e = new K.KubeError(text);
+    assert.ok(e.auth && e.aws && !e.gcloud && !e.plugin, name);
+    assert.deepEqual(K.signInFor(e, eks), { provider: "aws", title: titles[name], profile: "payments-admin" }, name);
+  }
+  assert.deepEqual(K.awsSignIn("payments-admin"), ["aws", "sso", "login", "--profile", "payments-admin"]);
+});
+
+test("an AWS error is still an AWS sign-in when the kubeconfig auth is unknown", () => {
+  assert.equal(K.signInFor(new K.KubeError(AWS.noToken), null).provider, "aws");
+});
+
+test("gcloud errors never offer an AWS sign-in, even on an EKS context", () => {
+  for (const [name, text] of Object.entries(GCLOUD)) {
+    const e = new K.KubeError(text);
+    assert.ok(!e.aws, name);
+    assert.notEqual(K.signInFor(e, null)?.provider, "aws", name);
+  }
+});
+
+test("a missing aws CLI, the network or RBAC never offer a sign-in", () => {
+  const eks = K.authOf(EKS_USER);
+  for (const [name, text] of Object.entries(OTHER)) assert.equal(K.signInFor(new K.KubeError(text), eks), null, name);
+  assert.ok(new K.KubeError(OTHER.noAwsCli).plugin);
 });
