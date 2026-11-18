@@ -26,13 +26,18 @@ An OpenLens-style Kubernetes panel for the [Herdr](https://herdr.dev) desktop ap
   - wrap, or scroll sideways through long lines; show or hide time
   - click lines to pick them, then **Copy** or **Ask agent** (sends them to a new Claude Code session, or another installed agent)
   - **Open in terminal** for plain `kubectl logs -f`
+- **Signing in.** When a cluster's sign-in has expired the panel says so and helps:
+  - **AWS (EKS):** it shows which AWS profile, region and role the cluster uses (from your kubeconfig), lets you pick another profile from `~/.aws/config` (marking SSO profiles and their SSO session, and warning when the one you pick won't refresh this cluster), and **Sign in with AWS SSO** opens a tab running `aws sso login --profile <profile>`. With no SSO profiles yet, **Set up SSO** runs `aws configure sso`.
+  - **GKE:** **Sign in with gcloud** opens a tab running `gcloud auth login`, or `gcloud auth application-default login` for clusters that use application default credentials.
+  - Either way the panel retries every 5 s for 3 minutes, so it comes back by itself once you finish in the browser.
 - **Actions:** Logs, Shell (`bash`, else `sh`), Port-forward (from container and service ports), Describe, Restart (Deployments, StatefulSets, DaemonSets) and Scale (Deployments, StatefulSets). Restart and scale ask first; on a production cluster the confirmation is red and names the cluster.
 
 ## Safety
 
 - **No delete and no YAML editing.** The only changes it can make are rollout restart and scale, each after a confirmation. This is a guard in the mod, not a security boundary: use RBAC for real limits.
 - **Secret values never reach the screen.** Listing replaces each value with its size and drops `stringData` and the last-applied annotation before anything is kept in memory, including in the YAML view.
-- **Programs it runs:** `kubectl` (your kubeconfig and credentials, as in a terminal); `/bin/sh` and your login shell once, to find `gke-gcloud-auth-plugin` and similar helpers on your interactive `PATH`; `pbcopy`, `wl-copy` or `xclip` for Copy; and an installed coding agent for Ask agent, which receives the log lines you chose.
+- **Programs it runs:** `kubectl` (your kubeconfig and credentials, as in a terminal); `aws sso login`, `aws configure sso` or `gcloud auth login` in a terminal tab, only when you press a sign-in button; `/bin/sh` and your login shell once, to find `gke-gcloud-auth-plugin` and similar helpers on your interactive `PATH`; `pbcopy`, `wl-copy` or `xclip` for Copy; and an installed coding agent for Ask agent, which receives the log lines you chose.
+- **AWS files:** it reads `~/.aws/config` (profile names, SSO session, account and role) to offer profiles. It never reads `~/.aws/credentials` or the SSO token cache.
 - **Files:** Copy writes the text to `~/.config/herdr-app/data/kube/clipboard.txt` for a moment and deletes it. Nothing else is written; lists and logs are not cached on disk.
 - **Network:** none of its own. Everything goes through `kubectl`.
 
@@ -56,7 +61,7 @@ herdr-app check ~/.config/herdr-app/mods/kube
 herdr-app do tab.new --name Kubernetes --mod kube
 ```
 
-No cluster at hand? `herdr-app do tab.new --name Demo --mod kube --props '{"demo":true}'` opens it on three made-up clusters (pods, usage, events and live logs; terminals are off there).
+No cluster at hand? `herdr-app do tab.new --name Demo --mod kube --props '{"demo":true}'` opens it on made-up clusters (pods, usage, events and live logs; terminals are off there), including an EKS cluster whose SSO session has expired. `{"demo":{"context":"demo:arn:aws:eks:us-east-1:123456789012:cluster/payments-eks"}}` starts on that one.
 
 It opens in a tab. To open it with a key, merge `keys.json` (`cmd-shift-k`) into yours. To keep it beside your terminals instead, add a block with `"content": { "mod": "kube", "props": { "docked": true } }` to a cloned layout. `docked` gives it a × that hides the block (`layout.hide`); `layout.show`, or the top bar button in [topbar-actions](../topbar-actions), brings it back.
 
