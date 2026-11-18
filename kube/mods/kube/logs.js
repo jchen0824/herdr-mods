@@ -66,6 +66,10 @@ export const lineKey = (l) => `${l.src}\u0000${l.ts}\u0000${l.text}`;
 // Adds newly read lines to `lines` (kept in time order), skipping ones already there.
 // `seen` holds the keys of the lines at the newest timestamp, the only ones a
 // --since-time read can repeat. Returns how many were added.
+// The second a sortable timestamp falls in: --since-time is kept to whole seconds by the API,
+// so a following read repeats every line from the start of the newest line's second.
+const second = (at) => at.slice(0, 19);
+
 export function merge(state, out) {
   const fresh = [];
   for (const raw of out.split("\n")) {
@@ -80,8 +84,12 @@ export function merge(state, out) {
   for (const l of fresh) {
     l.id = state.next++;
     state.lines.push(l);
-    if (l.at && (!state.lastAt || l.at > state.lastAt)) { state.last = l.ts; state.lastAt = l.at; state.seen = new Set(); }
-    if (l.at && l.at === state.lastAt) state.seen.add(lineKey(l));
+    if (l.at && (!state.lastAt || l.at > state.lastAt)) {
+      if (second(l.at) !== state.lastSec) { state.seen = new Set(); state.lastSec = second(l.at); }
+      state.last = l.ts; state.lastAt = l.at;
+    }
+    // Remember every line of the newest second: the next read can repeat any of them.
+    if (l.at && second(l.at) === state.lastSec) state.seen.add(lineKey(l));
   }
   if (state.lines.length > MAX_LINES) state.lines.splice(0, state.lines.length - MAX_LINES);
   if (state.lines.length > fresh.length && fresh[0].at) {
@@ -91,7 +99,7 @@ export function merge(state, out) {
   }
   return fresh.length;
 }
-export const emptyState = () => ({ lines: [], seen: new Set(), last: null, lastAt: "", next: 0 });
+export const emptyState = () => ({ lines: [], seen: new Set(), last: null, lastAt: "", lastSec: "", next: 0 });
 
 // The lines to show: hidden sources, level and (with onlyMatches) the search.
 export function visible(lines, { hidden = new Set(), lvl = "all", q = "", onlyMatches = false } = {}) {

@@ -471,17 +471,22 @@ export function podResources(p) {
 
 // ---- YAML, from the object already in hand (managedFields left out, as OpenLens does) ----
 
-const PLAIN = /^[A-Za-z0-9_./@][A-Za-z0-9_ ./@:,()+=-]*$/;
-const RESERVED = /^(true|false|null|yes|no|on|off|y|n|~|[-+]?(\d[\d_]*)?\.?\d+([eE][-+]?\d+)?|0x[0-9a-f]+)$/i;
+// A plain YAML scalar can't start with an indicator (@ and ` are reserved).
+const PLAIN = /^[A-Za-z0-9_./][A-Za-z0-9_ ./@:,()+=-]*$/;
+// Words YAML 1.1 or 1.2 reads as something other than a string.
+const RESERVED = /^(true|false|null|yes|no|on|off|y|n|~|[-+]?(\d[\d_]*)?\.?\d+([eE][-+]?\d+)?|0x[0-9a-f]+|0o[0-7]+|[-+]?\.inf|\.nan)$/i;
+// Safe to write unquoted, as a key or a value: reads back as the same string.
+// Anything number-shaped ("0.", "1_000", ".5", "1e3") is quoted rather than matched exactly
+// against YAML's number grammars: extra quotes are harmless in a read-only view.
+const NUMBERISH = /^[-+]?[\d._]*([eE][-+]?[\d_]*)?$/;
+const plain = (s) => s !== "" && PLAIN.test(s) && !RESERVED.test(s) && !NUMBERISH.test(s) && !/: |:$| #|\s$/.test(s);
 function scalar(v) {
   if (v === null || v === undefined) return "null";
   if (typeof v === "boolean" || typeof v === "number") return String(v);
   const s = String(v);
-  if (s === "") return '""';
-  if (PLAIN.test(s) && !RESERVED.test(s) && !/: |:$| #|\s$/.test(s)) return s;
-  return JSON.stringify(s);
+  return plain(s) ? s : JSON.stringify(s);
 }
-const keyOf = (k) => (PLAIN.test(k) && !RESERVED.test(k) && !/: |:$/.test(k) ? k : JSON.stringify(k));
+const keyOf = (k) => (plain(k) ? k : JSON.stringify(k));
 
 function block(v, ind) {
   if (Array.isArray(v)) {
