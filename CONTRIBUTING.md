@@ -6,8 +6,12 @@ People and coding agents use the same commands and review process. Read
 ## Setup and verification
 
 Install Node 20 or newer, and [Herdr](https://herdr.dev) to try mods. Run
-`make hooks` once, then `make check` before every commit. It needs no
-dependencies, cluster or Herdr install.
+`npm ci` and `make hooks` once, then `make check` before every commit. It needs
+no cluster or Herdr install; the only dependencies are test-only (`fast-check`, `yaml`).
+
+When a property test fails, it prints a counterexample, already shrunk to the smallest
+input that breaks the rule, and a `seed`. Fix the code (or the rule, if the rule was wrong),
+and keep the case as an ordinary example test when it explains a real bug.
 
 To try a mod, copy `<folder>/mods/<name>` into `~/.config/herdr-app/mods/`, run
 `herdr-app check ~/.config/herdr-app/mods/<name>`, and use it in the app.

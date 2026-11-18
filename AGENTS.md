@@ -30,7 +30,8 @@ implementing a feature does not imply them.
 ## Commands
 
 ```sh
-make check                      # mod folder structure, JS syntax, QuickJS rules, unit tests
+npm ci                          # once: test-only dependencies (fast-check, yaml)
+make check                      # mod folder structure, JS syntax, QuickJS rules, unit and property tests
 make test                       # unit tests only (Node's test runner, no dependencies)
 make e2e                        # kube against a real, disposable cluster (CI uses kind); KUBE_E2E_CONTEXT
 make herdr-check                # herdr-app check on every mod (CI installs Herdr on Linux)
@@ -59,6 +60,10 @@ herdr-app check ~/.config/herdr-app/mods/<name>   # Herdr's own check, on an ins
   (kind in CI's `e2e` job); it creates and deletes the `herdr-kube-e2e` namespace. CI also
   installs Herdr on Linux and runs `herdr-app check` on every mod; the rest of the UI is
   verified in the app.
+- `kube/test/properties.test.mjs`: property-based tests (fast-check) for rules that must hold
+  for any input: following logs never loses or repeats a line, paged reads return exactly the
+  server's objects or an error, no secret value survives redaction, the YAML view reads back
+  as the same object. A failure prints the smallest failing input and a seed to replay it.
 - `scripts/check-mods.mjs` checks each folder is a complete entry, every `.js` parses,
   `??` is never mixed with `||`/`&&` without parentheses (QuickJS rejects it), and
   Herdr's generated `jsconfig.json`/`*.d.ts` are not committed.
