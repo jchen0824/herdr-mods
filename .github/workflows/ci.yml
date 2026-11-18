@@ -23,6 +23,7 @@ jobs:
         with:
           persist-credentials: false
       - run: node --version
+      - run: npm ci
       - run: make check
 
   e2e:

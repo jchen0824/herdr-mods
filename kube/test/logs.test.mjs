@@ -23,3 +23,12 @@ assert.ok(L.args({ namespace: "ns", kind: "Pod", name: "p", previous: true }).in
 assert.equal(L.shortSrc("api-7f78c9-abc12/app"), "7f78c9-abc12/app");
 assert.equal(L.asText(s.lines.slice(0, 1), { time: false }), "[a/c] one");
 
+
+test("a following read that repeats the newest second adds nothing twice", () => {
+  // Found by fast-check: --since-time keeps whole seconds, so the next read repeats lines from
+  // the start of the newest line's second, not only those at its exact timestamp.
+  const s = L.emptyState();
+  L.merge(s, "[pod/a/app] 2026-01-01T00:00:05.000Z one\n[pod/a/app] 2026-01-01T00:00:05.001Z two");
+  L.merge(s, "[pod/a/app] 2026-01-01T00:00:05.000Z one\n[pod/a/app] 2026-01-01T00:00:05.001Z two\n[pod/a/app] 2026-01-01T00:00:05.900Z three");
+  assert.deepEqual(s.lines.map((l) => l.text), ["one", "two", "three"]);
+});
