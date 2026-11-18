@@ -141,6 +141,30 @@ export function signInFor(e, auth) {
 }
 export const awsSignIn = (profile) => ["aws", "sso", "login", "--profile", profile];
 
+// The profile a cluster signs in with: the kubeconfig's AWS_PROFILE/--profile, else the AWS
+// CLI's default profile (named "default"), as the aws command itself would use.
+export const clusterAwsProfile = (auth) => auth?.profile ?? "default";
+
+// Which profile the picker starts on: the cluster's own when ~/.aws/config has it, else the
+// first SSO profile, else the first profile.
+export function pickAwsProfile(profiles, auth) {
+  const want = clusterAwsProfile(auth);
+  return (profiles.find((p) => p.name === want) ?? profiles.find((p) => p.sso) ?? profiles[0])?.name ?? want;
+}
+
+// Why signing in to `pick` won't fix this cluster, or null: it isn't an SSO profile, or it uses
+// a different SSO session from the cluster's profile.
+export function awsPickWarning(profiles, auth, pick) {
+  const p = profiles.find((x) => x.name === pick);
+  if (!p) return null;
+  if (!p.sso) return `${p.name} isn't an SSO profile: sign in to it another way (aws configure).`;
+  const mine = profiles.find((x) => x.name === clusterAwsProfile(auth));
+  if (mine && mine.name !== p.name && (p.session ?? p.startUrl) !== (mine.session ?? mine.startUrl)) {
+    return `${p.name} uses a different SSO session from ${mine.name}, so signing in to it won't refresh this cluster.`;
+  }
+  return null;
+}
+
 // Profiles in ~/.aws/config: [default], [profile NAME] and [sso-session NAME] sections. An SSO
 // profile names an sso_session (current format) or carries sso_start_url itself (legacy).
 // Signing in to one profile refreshes every profile of the same SSO session.

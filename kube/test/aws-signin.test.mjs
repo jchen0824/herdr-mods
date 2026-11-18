@@ -119,3 +119,40 @@ test("a missing aws CLI, the network or RBAC never offer a sign-in", () => {
   for (const [name, text] of Object.entries(OTHER)) assert.equal(K.signInFor(new K.KubeError(text), eks), null, name);
   assert.ok(new K.KubeError(OTHER.noAwsCli).plugin);
 });
+
+// From Codex's review: with no profile in the kubeconfig the cluster uses [default]; the picker
+// must start there even when another SSO profile comes first, and warn about other sessions.
+const DEFAULT_LAST = K.parseAwsConfig(`[profile sandbox]
+sso_session = other
+sso_account_id = 210987654321
+sso_role_name = Developer
+
+[default]
+sso_session = acme
+sso_account_id = 123456789012
+sso_role_name = Admin
+
+[sso-session other]
+sso_start_url = https://other.awsapps.com/start
+
+[sso-session acme]
+sso_start_url = https://acme.awsapps.com/start
+`);
+
+test("no profile in the kubeconfig means the default profile, and the picker starts there", () => {
+  const noProfile = { provider: "aws", profile: null };
+  assert.equal(K.clusterAwsProfile(noProfile), "default");
+  assert.equal(K.pickAwsProfile(DEFAULT_LAST, noProfile), "default");
+  assert.match(K.awsPickWarning(DEFAULT_LAST, noProfile, "sandbox"), /different SSO session from default/);
+  assert.equal(K.awsPickWarning(DEFAULT_LAST, noProfile, "default"), null);
+});
+
+test("the picker starts on the cluster's own profile, else the first SSO one", () => {
+  const ps = K.parseAwsConfig(Demo.AWS_CONFIG);
+  assert.equal(K.pickAwsProfile(ps, { profile: "payments-readonly" }), "payments-readonly");
+  assert.equal(K.pickAwsProfile(ps, { profile: "gone" }), "payments-admin");
+  assert.equal(K.pickAwsProfile([], { profile: "gone" }), "gone");
+  // Same session: no warning. Not SSO: a warning.
+  assert.equal(K.awsPickWarning(ps, { profile: "payments-admin" }, "payments-readonly"), null);
+  assert.match(K.awsPickWarning(ps, { profile: "payments-admin" }, "ci-bot"), /isn't an SSO profile/);
+});

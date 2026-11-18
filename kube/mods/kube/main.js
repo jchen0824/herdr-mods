@@ -186,6 +186,8 @@ export default class Kube extends View {
 
   reset(cx) {
     this.gen++;
+    this.aws = null;
+    this.signingIn = 0;
     this.items = [];
     this.error = null;
     this.ctxErrors = {};
@@ -591,14 +593,16 @@ export default class Kube extends View {
 
   // Read ~/.aws/config once an AWS sign-in is needed; pick the cluster's own profile, else the
   // first SSO profile.
+  // Kept per cluster: switching clusters (reset) drops it, and a read that finishes after a
+  // switch is ignored.
   loadAws(cx) {
-    if (this.aws) return;
-    this.aws = { profiles: null, pick: null };
+    if (this.aws?.ctx === this.ctx) return;
     const ctx = this.ctx;
+    this.aws = { ctx, profiles: null, pick: null };
     cx.spawn(async (cx) => {
       const profiles = await K.awsProfiles(ctx);
-      const want = this.authOf(ctx)?.profile;
-      this.aws = { profiles, pick: (profiles.find((p) => p.name === want) ?? profiles.find((p) => p.sso) ?? profiles[0])?.name ?? want ?? null };
+      if (this.aws?.ctx !== ctx) return;
+      this.aws = { ctx, profiles, pick: K.pickAwsProfile(profiles, this.authOf(ctx)) };
       cx.notify();
     });
   }
@@ -606,6 +610,7 @@ export default class Kube extends View {
   // A sign-in runs in a terminal tab (it may open a browser). Meanwhile retry every 5 s for
   // 3 minutes, so the panel comes back by itself once the sign-in finishes.
   signIn(name, argv, cx) {
+    if (K.isDemo(this.ctx)) { notify({ title: "Demo clusters have no sign-in", body: "The sign-in buttons run aws or gcloud on a real cluster.", level: "info", timeout: 4000 }); return; }
     run("tab.new", { name, argv });
     const started = this.signingIn = Date.now();
     cx.timer.every(5000, (cx) => {
@@ -616,12 +621,27 @@ export default class Kube extends View {
     cx.notify();
   }
 
+  // aws configure sso runs in a tab: re-read ~/.aws/config every 5 s (for 5 minutes) until an SSO
+  // profile appears, and keep retrying the cluster too.
+  setupSso(cx) {
+    if (K.isDemo(this.ctx)) { notify({ title: "Demo clusters have no sign-in", level: "info", timeout: 4000 }); return; }
+    run("tab.new", { name: "aws configure sso", argv: ["aws", "configure", "sso"] });
+    const started = this.signingIn = Date.now();
+    cx.timer.every(5000, (cx) => {
+      if (this.signingIn !== started) return;
+      if (Date.now() - started > 300000) { this.signingIn = 0; cx.notify(); return; }
+      if (!this.aws?.profiles?.some((p) => p.sso)) { this.aws = null; this.loadAws(cx); }
+      if (this.error && !this.busy) this.refresh(cx, true);
+    });
+    cx.notify();
+  }
+
   awsBox(t) {
     const a = this.authOf(this.ctx) ?? {};
     const profiles = this.aws?.profiles;
     const pick = profiles?.find((p) => p.name === this.aws?.pick) ?? null;
-    const mine = profiles?.find((p) => p.name === a.profile) ?? null;
-    const uses = a.profile ? `This cluster signs in with AWS profile ${a.profile}` : "This cluster signs in with your default AWS profile";
+    const clusterProfile = K.clusterAwsProfile(a);
+    const uses = a.profile ? `This cluster signs in with AWS profile ${a.profile}` : "This cluster signs in with your default AWS profile (default)";
     const where = [a.region, a.role ? `role ${a.role.split("/").pop()}` : null].filter(Boolean).join(" · ");
     const rows = (profiles ?? []).map((p) => h_flex().id(`kube-aws-${p.name}`).h(40).flex_none().px(8).gap(8).items_center().rounded(5).cursor_pointer()
       .when(p.name === this.aws?.pick, (e) => e.bg(t.selected)).hover((st) => st.bg(t.hover))
@@ -629,7 +649,7 @@ export default class Kube extends View {
       .child(v_flex().flex_1().min_w(0)
         .child(div().truncate().text_size(12.5).text_color(t.foreground).child(p.name))
         .child(div().truncate().text_size(10.5).text_color(t.dim).child([p.session ? `session ${p.session}` : p.startUrl ? "legacy SSO" : "no SSO", p.account, p.role].filter(Boolean).join(" · "))))
-      .when(p.name === a.profile, (e) => e.child(div().px(5).rounded(4).bg(t.raised).text_size(9.5).text_color(t.muted).child("CLUSTER")))
+      .when(p.name === clusterProfile, (e) => e.child(div().px(5).rounded(4).bg(t.raised).text_size(9.5).text_color(t.muted).child("CLUSTER")))
       .child(div().px(5).rounded(4).text_size(9.5).font_semibold().bg(p.sso ? t.accent : t.raised).text_color(p.sso ? t.accent_foreground : t.dim).child(p.sso ? "SSO" : "KEYS")));
     const list = v_flex().id("kube-aws-card").w(340).h(Math.min(360, 40 + Math.max(1, rows.length) * 41)).p(5).gap(4).rounded(8)
       .bg(t.popover).border_1().border_color(t.border).shadow_md()
@@ -637,10 +657,7 @@ export default class Kube extends View {
       .child(div().flex_1().min_h(0).relative()
         .child(v_flex().id("kube-aws-list").size_full().overflow_y_scroll().gap(1).children(rows))
         .child(Scrollbar.vertical("kube-aws-list").absolute().inset_0()));
-    const warn = !pick ? null
-      : !pick.sso ? `${pick.name} isn't an SSO profile: sign in to it another way (aws configure).`
-      : mine && pick.name !== mine.name && (pick.session ?? pick.startUrl) !== (mine.session ?? mine.startUrl)
-        ? `${pick.name} uses a different SSO session from ${mine.name}, so signing in to it won't refresh this cluster.` : null;
+    const warn = profiles ? K.awsPickWarning(profiles, a, this.aws?.pick) : null;
     return v_flex().gap(8).items_center().w_full().max_w(560)
       .child(div().text_size(12).text_color(t.muted).child(`${uses}${where ? ` (${where})` : ""}.`))
       .child(profiles == null ? div().text_size(12).text_color(t.dim).child("Reading ~/.aws/config…")
@@ -679,10 +696,7 @@ export default class Kube extends View {
           if (!pick?.sso) return;
           this.signIn(`aws sso login · ${pick.name}`, K.awsSignIn(pick.name), cx);
         })))
-        .when(noProfiles, (el) => el.child(this.button(t, "kube-aws-setup", "Set up SSO", true, (cx) => {
-          run("tab.new", { name: "aws configure sso", argv: ["aws", "configure", "sso"] });
-          this.aws = null; cx.notify();
-        })))
+        .when(noProfiles, (el) => el.child(this.button(t, "kube-aws-setup", "Set up SSO", true, (cx) => this.setupSso(cx))))
         .when(sign?.provider === "gcloud", (el) => el.child(this.button(t, "kube-login", "Sign in with gcloud", true, (cx) => {
           this.signIn(sign.argv.join(" "), sign.argv, cx);
         })))
