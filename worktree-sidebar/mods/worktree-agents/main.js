@@ -386,7 +386,7 @@ export default class Agents extends View {
     // A group's header; it folds the group. Folded, it says how many and the most urgent state.
     const header = (g) => {
       const open = !isFolded(g);
-      const top = g.members.reduce((m, a) => ((RANK[a.status] ?? 0) > (RANK[m] ?? 0) ? a.status : m), null);
+      const top = SECTION_STATUS[g.members.reduce((rank, a) => Math.max(rank, rankOf(a)), 0)];
       return h_flex()
         .id(g.id)
         .px(8)
@@ -410,7 +410,7 @@ export default class Agents extends View {
         .child(div().truncate().text_color(t[g.status] ?? t.dim).child(g.label))
         .when(byPriority || !open, (el) => el.child(div().text_color(t.dim).child(String(g.members.length))))
         .child(div().flex_1())
-        .when(!open && !byPriority && top && top !== "idle", (el) => el.child(this.status(t, { status: top }, true)))
+        .when(!open && !byPriority && Boolean(top), (el) => el.child(this.status(t, { status: top }, true)))
         .child(svg(`mods/workspace-chrome/chevron-${open ? "down" : "right"}.svg`).size(11).flex_none().text_color(t.dim));
     };
     const rows = collapsed

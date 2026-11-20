@@ -8,7 +8,7 @@ Keep Spaces compact by showing tab lists only when you expand a linked Git workt
 
 - Spaces keeps its machine groups, colored space avatars and branch information. A linked worktree has a 22px chevron control.
 - Expanded worktree tabs appear as indented 25px rows. The active tab is highlighted.
-- In Agents' **Grouped by space** view, a chevron appears on each header. A folded group shows its session count and an active status when applicable.
+- In Agents' **Grouped by space** view, a chevron appears on each header. A folded group shows its session count and the most urgent active status among its agents and sub-agents.
 
 ## How it behaves
 

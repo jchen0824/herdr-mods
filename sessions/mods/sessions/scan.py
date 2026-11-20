@@ -21,6 +21,8 @@ import sqlite3
 import subprocess
 import sys
 import time
+from contextlib import closing
+from copy import deepcopy
 from datetime import datetime
 
 VERSION = 4
@@ -309,29 +311,33 @@ def codex(idx, rows):
     dbs = sorted(glob.glob(os.path.join(HOME, ".codex", "state_*.sqlite")), key=lambda p: int(re.sub(r"\D", "", os.path.basename(p)) or 0))
     if not dbs:
         return
-    texts = {}
-    hist = os.path.join(HOME, ".codex", "history.jsonl")
-    if os.path.exists(hist):
-        t = Tail(idx, hist, "codex-history", {"counts": {}})
-        for mm, a, b in t.lines(rb'"session_id"'):
-            try:
-                o = json.loads(mm[a:b])
-            except ValueError:
-                continue
-            sid, text = o.get("session_id"), one_line(o.get("text"))
-            if sid and text:
-                t.state["counts"][sid] = t.state["counts"].get(sid, 0) + 1
-                texts.setdefault(sid, []).append(text[:PROMPT_CAP])
-        t.close()
-        counts = t.state["counts"]
-    else:
-        counts = {}
-    con = sqlite3.connect("file:%s?mode=ro" % dbs[-1], uri=True, timeout=2)
-    try:
+    # Read the database first so an unavailable database never consumes history.
+    with closing(sqlite3.connect("file:%s?mode=ro" % dbs[-1], uri=True, timeout=2)) as con:
         cols = {r[1] for r in con.execute("pragma table_info(threads)")}
         want = [c for c in ("id", "cwd", "title", "first_user_message", "model", "updated_at", "updated_at_ms", "git_branch") if c in cols]
         q = "select %s from threads where archived = 0 and source in ('cli', 'vscode')" % ", ".join(want)
-        for r in con.execute(q):
+        threads = con.execute(q).fetchall()
+
+    hist = os.path.join(HOME, ".codex", "history.jsonl")
+    previous_history = deepcopy(idx.files.get(hist))
+    try:
+        texts = {}
+        if os.path.exists(hist):
+            t = Tail(idx, hist, "codex-history", {"counts": {}})
+            for mm, a, b in t.lines(rb'"session_id"'):
+                try:
+                    o = json.loads(mm[a:b])
+                except ValueError:
+                    continue
+                sid, text = o.get("session_id"), one_line(o.get("text"))
+                if sid and text:
+                    t.state["counts"][sid] = t.state["counts"].get(sid, 0) + 1
+                    texts.setdefault(sid, []).append(text[:PROMPT_CAP])
+            t.close()
+            counts = t.state["counts"]
+        else:
+            counts = {}
+        for r in threads:
             d = dict(zip(want, r))
             sid = d["id"]
             first = one_line(d.get("first_user_message"))
@@ -351,9 +357,16 @@ def codex(idx, rows):
                     f.write("\n".join(new_text) + "\n")
             if exists or new_text:
                 idx.seen.add(p)
-                idx.files.setdefault(p, {"key": key})
-    finally:
-        con.close()
+                if p not in idx.files:
+                    idx.files[p] = {"key": key}
+                    idx.dirty = True
+    except Exception:
+        # Retry the history on the next scan if a prompt cache could not be written.
+        if previous_history is None:
+            idx.files.pop(hist, None)
+        else:
+            idx.files[hist] = previous_history
+        raise
 
 
 def kiro_prompt(content):
@@ -477,6 +490,11 @@ def scan():
         try:
             fn(idx, rows)
         except Exception as e:  # one agent's surprise shouldn't hide the others
+            # A failed source cannot tell us which of its cached sessions were deleted.
+            for path, entry in idx.files.items():
+                key = entry.get("key", "")
+                if key.startswith(name + ":") or key == name + "-history":
+                    idx.seen.add(path)
             errors.append("%s: %s" % (name, e))
     try:
         idx.save()
