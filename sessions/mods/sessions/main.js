@@ -231,11 +231,16 @@ export default class Sessions extends View {
         Object.assign(m, { total: d.total, scripted: d.scripted, partial: d.partial, error: d.errors?.length ? d.errors.join("; ") : null });
       } catch (e) {
         m.error = String(e.message ?? e);
+        m.partial = false;
       }
       m.loading = false;
       m.loaded = true;
-      // A first scan of a long history goes on where the last run stopped.
-      if (m.partial) cx.timer.after(200, (cx) => this.load(on, cx));
+      // Continue a successful partial scan while its machine is still in scope.
+      if (m.partial) {
+        cx.timer.after(200, (cx) => {
+          if (m.partial && this.visible() && (on === null || this.remotes.includes(on))) this.load(on, cx);
+        });
+      }
       cx.notify();
     });
   }
