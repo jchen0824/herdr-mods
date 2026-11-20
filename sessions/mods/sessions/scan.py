@@ -341,14 +341,15 @@ def codex(idx, rows):
             title = one_line(d.get("title"))
             updated = d.get("updated_at_ms") or (d.get("updated_at") or 0) * 1000
             rows.append(row("codex", sid, s, title if title and title != first else None, d.get("cwd"), updated))
-            if sid in texts or first:
-                key = "codex:" + sid
-                p = text_path(key)
-                new = not os.path.exists(p)
-                if new or sid in texts:
-                    os.makedirs(TEXT, exist_ok=True)
-                    with open(p, "a") as f:
-                        f.write("\n".join(([first] if new and first else []) + texts.get(sid, [])) + "\n")
+            key = "codex:" + sid
+            p = text_path(key)
+            exists = os.path.exists(p)
+            new_text = ([first] if not exists and first else []) + texts.get(sid, [])
+            if new_text:
+                os.makedirs(TEXT, exist_ok=True)
+                with open(p, "a") as f:
+                    f.write("\n".join(new_text) + "\n")
+            if exists or new_text:
                 idx.seen.add(p)
                 idx.files.setdefault(p, {"key": key})
     finally:
