@@ -6,6 +6,8 @@ Mods for the [Herdr](https://herdr.dev) desktop app. Each folder is one mod, wit
 | --- | --- |
 | [kube](kube) | An OpenLens-style Kubernetes panel: several clusters at once, 18 resource kinds, live CPU/memory, a searchable log viewer with copy and Ask agent, shells and port-forwards in Herdr terminals. Read-mostly: restart and scale behind a confirmation, no delete. |
 | [topbar-actions](topbar-actions) | Review (Redline) and Kubernetes buttons at the right end of the tab bar. |
+| [sessions](sessions) | Search and reopen agent sessions, with folder grouping and per-machine exclusions. |
+| [worktree-sidebar](worktree-sidebar) | Expand tabs in linked worktrees and fold the Agents list by space. |
 
 ![kube](kube/preview.png)
 
