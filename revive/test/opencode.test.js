@@ -198,4 +198,11 @@ test("a herdr-revive folder of someone else's is left alone", POSIX_HARNESS, () 
   assert.match(r.stderr, /not Revive's OpenCode plugin/);
   assert.equal(readFileSync(join(h.config, "herdr-revive", "tui.js"), "utf8"), "export default {};\n");
   assert.ok(!existsSync(join(h.config, "cli.json")) || !readFileSync(join(h.config, "cli.json"), "utf8").includes("herdr-revive"));
+  // Its registrations are its own too: uninstall leaves them.
+  writeFileSync(join(h.config, "cli.json"), '{ "plugins": ["./herdr-revive"] }\n');
+  writeFileSync(join(h.config, "tui.jsonc"), '{ "plugin": ["./herdr-revive/tui.js"] }\n');
+  h.run("uninstall", "--no-shell");
+  assert.deepEqual(h.json("cli.json").plugins, ["./herdr-revive"]);
+  assert.deepEqual(h.json("tui.jsonc").plugin, ["./herdr-revive/tui.js"]);
+  assert.equal(readFileSync(join(h.config, "herdr-revive", "tui.js"), "utf8"), "export default {};\n");
 });

@@ -829,6 +829,8 @@ function withEntry(path, key, entry, remove) {
 function linkOpencode(remove) {
   const changed = [];
   if (remove) {
+    // A herdr-revive/ that isn't Revive's: its folder and its config entries are someone else's.
+    if (!isOpencodeStub()) return changed;
     if (readText(OPENCODE.cli()).includes(OPENCODE.entry) && withEntry(OPENCODE.cli(), "plugins", OPENCODE.entry, true)) changed.push(OPENCODE.cli());
     if (readText(OPENCODE.tui()).includes(OPENCODE.tuiEntry) && withEntry(OPENCODE.tui(), "plugin", OPENCODE.tuiEntry, true)) changed.push(OPENCODE.tui());
     if (isOpencodeStub()) { rmSync(OPENCODE.folder(), { recursive: true, force: true }); changed.push(OPENCODE.folder()); }
