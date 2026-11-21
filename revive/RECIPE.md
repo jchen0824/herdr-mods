@@ -56,7 +56,9 @@ and turns the update check off. Upstream changes are merged by hand.
 ## Updating it (for the agent doing it)
 
 **This copy:** update from `revive/` in jchen0824/herdr-mods, not from upstream: an upstream
-release has no OpenCode support and would remove it. The steps below are upstream's; they
+release has no OpenCode support and would remove it. herdr-mods brings upstream releases in
+with `scripts/sync-revive.mjs` (a three-way merge from the base in `revive/UPSTREAM.json`)
+and its weekly *Revive upstream* workflow, which opens a pull request. The steps below are upstream's; they
 apply to this copy with that repository and folder in place of upstream's.
 
 The dialog offers *Update the Revive mod from github.com/dmazlum/herdr-revive to its

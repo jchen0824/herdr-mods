@@ -10,7 +10,13 @@ This is [herdr-revive](https://github.com/dmazlum/herdr-revive) by Devrim Mazlum
 
 - **OpenCode.** A TUI plugin (`mods/revive/opencode/revive.js`) records the session the TUI shows, and Revive resumes it with `opencode --session <id>`. `revive.mjs install` puts it in `~/.config/opencode/herdr-revive/` and names it in `cli.json` (and `tui.jsonc` for OpenCode 1.x). It has no fork. `--auto` is left out of automatic resumes.
 - **Flag values with control characters are refused**, so a label can't carry escapes into the text a manual Resume pastes.
-- **The update check is off**: an upstream release would replace this copy, OpenCode and all. Upstream changes are merged here by hand.
+- **The update check is off**: an upstream release would replace this copy, OpenCode and all.
+
+## Keeping up with upstream
+
+`revive/UPSTREAM.json` records the upstream commit this copy is based on. `make sync-revive` (or `node scripts/sync-revive.mjs [--ref <tag>]`) applies upstream's changes since then with a three-way merge, keeping this copy's own, and lists any conflicts. When git can't apply upstream's changes at all (upstream deleted a file this copy changed, say), it changes nothing, keeps the base and fails: merge those by hand. Upstream's README, LICENSE and `.github` aren't applied; the license is copied to `licenses/` when it changes.
+
+Every Monday the *Revive upstream* workflow does this for upstream's newest release and opens (or updates) a pull request on `chore/revive-upstream`: a draft when there are conflicts or `make check` fails. Run it by hand from the Actions tab, with any upstream ref.
 
 ## Install
 

@@ -63,7 +63,10 @@ herdr-app check ~/.config/herdr-app/mods/<name>   # Herdr's own check, on an ins
   verified in the app.
 - `revive/`: dmazlum/herdr-revive (MIT, `licenses/dmazlum-herdr-revive-MIT.txt`) plus OpenCode; its own
   tests run from that folder (`cd revive && node --test test/*.test.js`, part of `npm test`).
-  Its update check is off: merge upstream by hand, keeping the OpenCode changes.
+  Its update check is off. `revive/UPSTREAM.json` is the upstream base; `make sync-revive`
+  (`scripts/sync-revive.mjs`) three-way merges upstream since then, and the weekly
+  `revive-upstream` workflow opens a `chore/revive-upstream` PR (it starts `ci.yml` itself:
+  a PR opened with the workflow token doesn't). Keep the OpenCode changes when resolving.
 - `sessions/test/`: runs `scan.py` (Python 3.9+, standard library only) against made-up
   agent histories in a throwaway HOME, with a fake `opencode` on PATH for delete.
 - `kube/test/properties.test.mjs`: property-based tests (fast-check) for rules that must hold
