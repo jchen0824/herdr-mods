@@ -96,11 +96,12 @@ test("reads OpenCode 1.x's session, message and part tables", () => {
       insert into message values ('u2', 'ses_gggggggggggg', 1, '{"role":"user"}');
       insert into part values ('p1', 'u1', 'ses_ffffffffffff', '{"type":"text","text":"port the parser"}');
       insert into part values ('p2', 'u1', 'ses_ffffffffffff', '{"type":"text","text":"injected","synthetic":true}');
+      insert into part values ('p2b', 'u1', 'ses_ffffffffffff', '{"type":"text","text":"to rust"}');
       insert into part values ('p3', 'a1', 'ses_ffffffffffff', '{"type":"text","text":"assistant reply"}');
       insert into part values ('p4', 'u2', 'ses_gggggggggggg', '{"type":"text","text":"child prompt"}');
     `);
     const rows = scan(dir, "list", "--scripted").rows.filter((r) => r.agent === "opencode");
-    assert.deepEqual(rows.map((r) => [r.id, r.title, r.first, r.prompts]), [["ses_ffffffffffff", "Old schema", "port the parser", 1]]);
+    assert.deepEqual(rows.map((r) => [r.id, r.title, r.first, r.prompts]), [["ses_ffffffffffff", "Old schema", "port the parser to rust", 1]]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 

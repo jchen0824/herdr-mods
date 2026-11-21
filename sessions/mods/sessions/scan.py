@@ -476,24 +476,31 @@ def opencode(idx, rows):
             tables = {r[0] for r in con.execute("select name from sqlite_master where type = 'table'")}
             if "session_v2" in tables:
                 sessions = "select id, directory, title, model, time_updated from session_v2 where parent_id is null and time_archived is null"
-                prompts = "select session_id, data from session_message where type = 'user' order by session_id, seq"
+                prompts = "select session_id, id, data from session_message where type = 'user' order by session_id, seq"
                 text = lambda d: d.get("text")
             elif {"session", "message", "part"} <= tables:  # 1.x
                 sessions = "select id, directory, title, null, time_updated from session where parent_id is null" + (
                     " and time_archived is null" if "time_archived" in {r[1] for r in con.execute("pragma table_info(session)")} else "")
-                prompts = ("select p.session_id, p.data from part p join message m on m.id = p.message_id "
+                prompts = ("select p.session_id, p.message_id, p.data from part p join message m on m.id = p.message_id "
                            "where json_extract(m.data, '$.role') = 'user' order by p.session_id, m.time_created, p.id")
                 text = lambda d: d.get("text") if d.get("type") == "text" and not d.get("synthetic") else None
             else:
                 continue
-            said = {}
-            for sid, raw in con.execute(prompts):
+            # One prompt per user message: 1.x splits a message into parts, joined here.
+            said, at = {}, None
+            for sid, mid, raw in con.execute(prompts):
                 try:
                     t = one_line(text(json.loads(raw)))
                 except (ValueError, AttributeError):
                     continue
-                if t:
-                    said.setdefault(sid, []).append(t[:PROMPT_CAP])
+                if not t:
+                    continue
+                typed = said.setdefault(sid, [])
+                if at == (sid, mid) and typed:
+                    typed[-1] = (typed[-1] + " " + t)[:PROMPT_CAP]
+                else:
+                    typed.append(t[:PROMPT_CAP])
+                at = (sid, mid)
             for sid, cwd, title, model, updated in con.execute(sessions):
                 typed = said.get(sid)
                 if not typed:
