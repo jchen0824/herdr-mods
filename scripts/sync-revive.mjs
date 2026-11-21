@@ -12,9 +12,10 @@
 // conflicts, licenseChanged }. Exits 0 even with conflicts (the files keep conflict markers and
 // are listed); 1 on errors. Run it from the repository root on a clean tree.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const STATE = "revive/UPSTREAM.json";
 const LICENSE = "licenses/dmazlum-herdr-revive-MIT.txt";
@@ -96,7 +97,9 @@ function main() {
   }
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run as a script (not imported by a test): compare as file URLs, which escape spaces and the
+// like, of the real path, as Node resolves the main module through symlinks.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   try {
     const out = main();
     if (asJson) process.stdout.write(`${JSON.stringify(out)}\n`);

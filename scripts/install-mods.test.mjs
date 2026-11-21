@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, readdirSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, readdirSync, mkdirSync, copyFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -47,4 +47,24 @@ test("a dry run writes nothing, and an unknown mod is an error", () => {
   assert.match(runNode(h, to, "--dry", "--mod", "kube"), /new {8}kube[\s\S]*Dry run: nothing written/);
   assert.deepEqual(readdirSync(to), []);
   assert.throws(() => runNode(h, to, "--mod", "nope"), /no mod nope in this repository/);
+});
+
+test("it runs from a folder whose path has a space", () => {
+  const h = home(), dir = join(h, "my scripts");
+  mkdirSync(dir);
+  copyFileSync("scripts/install-mods.mjs", join(dir, "install-mods.mjs"));
+  const out = execFileSync(process.execPath, [join(dir, "install-mods.mjs"), "--to", join(h, "mods"), "--dry", "--mod", "kube"], { encoding: "utf8", env: { ...process.env, HOME: h } });
+  assert.match(out, /new {8}kube[\s\S]*Dry run/);
+});
+
+test("a symlinked installed mod is backed up as its files, before they change", () => {
+  const h = home(), to = join(h, "mods"), real = join(h, "elsewhere", "topbar-actions");
+  runNode(h, join(h, "elsewhere"), "--mod", "topbar-actions");
+  writeFileSync(join(real, "main.js"), "// my custom code\n");
+  mkdirSync(to);
+  symlinkSync(real, join(to, "topbar-actions"));
+  runNode(h, to, "--mod", "topbar-actions");
+  const [backup] = readdirSync(h).filter((d) => d.startsWith("herdr-mods-backup-"));
+  assert.equal(readFileSync(join(h, backup, "topbar-actions", "main.js"), "utf8"), "// my custom code\n");
+  assert.equal(readFileSync(join(real, "main.js"), "utf8"), readFileSync("topbar-actions/mods/topbar-actions/main.js", "utf8"));
 });

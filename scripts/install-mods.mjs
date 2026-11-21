@@ -12,9 +12,10 @@
 //   not run, and layouts, keys.json and settings.json aren't touched. Every mod here has
 //   "place": "none", so a newly installed one shows only where a layout names it.
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const KEEP = new Set(["config.json"]);
 const GENERATED = new Set(["jsconfig.json", "gpui-kit.d.ts", "herdr.d.ts"]);
@@ -73,7 +74,9 @@ function main() {
     if (!write.length) { console.log(`  same       ${mod.name}${notes.length ? `  (${notes.join("; ")})` : ""}`); continue; }
     console.log(`  ${fresh ? "new    " : "update "}    ${mod.name}: ${write.join(", ")}${notes.length ? `  (${notes.join("; ")})` : ""}`);
     if (dry) continue;
-    if (!fresh) cpSync(target, join(backup, mod.name), { recursive: true });
+    // The files themselves, also when the installed mod (or a file in it) is a symlink: the copy
+    // below writes through a link, and a backup of the link would show the new code.
+    if (!fresh) cpSync(realpathSync(target), join(backup, mod.name), { recursive: true, dereference: true });
     for (const file of write) {
       mkdirSync(dirname(join(target, file)), { recursive: true });
       cpSync(join(mod.dir, file), join(target, file));
@@ -97,6 +100,8 @@ function main() {
   if (failed) process.exit(1);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run as a script (not imported by a test): compare as file URLs, which escape spaces and the
+// like, of the real path, as Node resolves the main module through symlinks.
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   try { main(); } catch (err) { console.error(`install-mods: ${err.message}`); process.exit(1); }
 }
