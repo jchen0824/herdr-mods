@@ -60,6 +60,8 @@ herdr-app check ~/.config/herdr-app/mods/<name>   # Herdr's own check, on an ins
   (kind in CI's `e2e` job); it creates and deletes the `herdr-kube-e2e` namespace. CI also
   installs Herdr on Linux and runs `herdr-app check` on every mod; the rest of the UI is
   verified in the app.
+- `sessions/test/`: runs `scan.py` (Python 3.9+, standard library only) against made-up
+  agent histories in a throwaway HOME, with a fake `opencode` on PATH for delete.
 - `kube/test/properties.test.mjs`: property-based tests (fast-check) for rules that must hold
   for any input: following logs never loses or repeats a line, paged reads return exactly the
   server's objects or an error, no secret value survives redaction, the YAML view reads back

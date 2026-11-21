@@ -1,6 +1,6 @@
 // Adapted from Vinay Tiparadi’s Sessions mod. See licenses/vinaytiparadi-herdr-mods-MIT.txt.
 // Sessions: the coding-agent sessions saved on this computer and on every connected machine
-// (Claude Code, Codex, Kiro), by recency or folder, for the shown space's repo, its machine or everywhere.
+// (Claude Code, Codex, Kiro, OpenCode), by recency or folder, for the shown space's repo, its machine or everywhere.
 // Type to search titles, folders and every prompt typed; click a session to resume it in a new tab
 // on its machine, in the folder it worked in; shift-click forks it (Claude Code, Codex). The trash
 // button on a hovered row deletes it, after a confirm.
@@ -19,6 +19,7 @@ const AGENTS = {
   claude: { name: "Claude Code", icon: "icons/claude.svg", resume: (s) => ["claude", "--resume", s.id], fork: (s) => ["claude", "--resume", s.id, "--fork-session"] },
   codex: { name: "Codex", icon: "icons/codex.svg", resume: (s) => ["codex", "resume", s.id], fork: (s) => ["codex", "fork", s.id] },
   kiro: { name: "Kiro", icon: "icons/kiro.svg", resume: (s) => ["kiro-cli", "chat", "--agent-engine", s.engine ?? "v2", "--resume-id", s.id] },
+  opencode: { name: "OpenCode", icon: "icons/opencode.svg", resume: (s) => ["opencode", "--session", s.id] },
 };
 
 const base = (path) => path.replace(/\/+$/, "").split("/").pop() || path;
@@ -29,7 +30,8 @@ const machineName = (on) => on ?? "This computer";
 const sortOrder = () => shared("sessions.sort") === "folder" ? "folder" : "newest";
 const folderKey = (s) => JSON.stringify([s.on ?? null, s.cwd ?? ""]);
 
-// Each group preserves the original newest-first order.
+// Each group preserves the original newest-first order. Groups go most recently active first
+// (unknown folders last); ties by name.
 function byFolder(list) {
   const groups = new Map();
   for (const s of list) {
@@ -37,12 +39,15 @@ function byFolder(list) {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(s);
   }
-  return [...groups.values()].sort(([a], [b]) =>
-    Number(!a.cwd) - Number(!b.cwd) ||
-    base(a.cwd || "").localeCompare(base(b.cwd || "")) ||
-    (a.cwd || "").localeCompare(b.cwd || "") ||
-    machineName(a.on).localeCompare(machineName(b.on))
-  ).flat();
+  const latest = (g) => Math.max(...g.map((s) => s.updated || 0));
+  return [...groups.values()].sort((ga, gb) => {
+    const [a] = ga, [b] = gb;
+    return Number(!a.cwd) - Number(!b.cwd) ||
+      latest(gb) - latest(ga) ||
+      base(a.cwd || "").localeCompare(base(b.cwd || "")) ||
+      (a.cwd || "").localeCompare(b.cwd || "") ||
+      machineName(a.on).localeCompare(machineName(b.on));
+  }).flat();
 }
 
 function ago(ms) {
