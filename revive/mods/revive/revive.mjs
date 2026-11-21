@@ -19,7 +19,7 @@
 //                                 nobody recorded (started before Revive was
 //                                 installed), or only T's; --dry-run says what
 //                                 it would write
-//   revive.mjs install [--zsh] [--bash] [--no-shell] [--no-codex] [--no-pi] [--no-omp] [--no-droid] [--no-cursor] [--no-copilot]
+//   revive.mjs install [--zsh] [--bash] [--no-shell] [--no-codex] [--no-pi] [--no-omp] [--no-droid] [--no-cursor] [--no-copilot] [--no-opencode]
 //   revive.mjs uninstall
 //   revive.mjs doctor             what is installed, as JSON
 //
@@ -322,6 +322,8 @@ async function outlived(t, pid, session, agentPid) {
   const now = await getTerminal(t).catch(() => null);
   if (!now || now.state !== "live" || !pid || now.pid !== pid || !alive(now.pid)) return false;
   if (readRecord(now.labels)?.session !== session) return false;
+  // OpenCode still in the foreground: its plugin was reloaded, or a new one is resuming it.
+  if (liveAgent(now) === "opencode") return false;
   return liveAgent(now) !== "copilot" || now.foreground?.pid === agentPid;
 }
 
@@ -789,6 +791,64 @@ const EXTENSIONS = {
 const EXTENSION_AGENTS = Object.keys(EXTENSIONS);
 const extensionPath = (key) => join(EXTENSIONS[key].dir(), "extensions", "herdr-revive.ts");
 const isExtension = (key, path) => readText(path).includes(EXTENSIONS[key].marker);
+/**
+ * OpenCode (herdr-mods): no hooks file and no extension folder. Its TUI loads plugin folders
+ * named in its config folder's cli.json (`plugins`, 2.x) and plugin files named in tui.jsonc
+ * (`plugin`, 1.x). Revive's is the folder `herdr-revive/`, holding a `tui.js` that loads the
+ * mod's opencode/revive.js (whose `import.meta.url` still finds the engine), as Herdr's own
+ * OpenCode plugin is installed. tui.jsonc is edited only when it is there and plain JSON.
+ */
+const opencodeDir = () => process.env.OPENCODE_CONFIG_DIR || join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "opencode");
+const OPENCODE = {
+  marker: "herdr-revive: opencode plugin",
+  source: join(dirname(ENGINE), "opencode", "revive.js"),
+  flag: "--no-opencode",
+  folder: () => join(opencodeDir(), "herdr-revive"),
+  stub: () => join(opencodeDir(), "herdr-revive", "tui.js"),
+  cli: () => join(opencodeDir(), "cli.json"),
+  tui: () => join(opencodeDir(), "tui.jsonc"),
+  entry: "./herdr-revive",
+  tuiEntry: "./herdr-revive/tui.js",
+};
+const opencodePresent = () => existsSync(opencodeDir()) && hasCli("opencode", [join(homedir(), ".opencode", "bin"), "/opt/homebrew/bin", "/usr/local/bin"]);
+const opencodeStub = () => `// ${OPENCODE.marker} (loads the Revive mod's own file)\nexport { default } from ${JSON.stringify(pathToFileURL(OPENCODE.source).href)};\n`;
+const isOpencodeStub = () => readText(OPENCODE.stub()).includes(OPENCODE.marker);
+
+/** Adds or takes out `entry` in the list `key` of a JSON config file; whether it changed. */
+function withEntry(path, key, entry, remove) {
+  return saveHooks(path, (doc) => {
+    const list = Array.isArray(doc[key]) ? doc[key].filter((e) => e !== entry) : [];
+    if (!remove) list.push(entry);
+    const next = { ...doc };
+    if (list.length || Array.isArray(doc[key])) next[key] = list;
+    return next;
+  });
+}
+
+/** Installs or removes OpenCode's plugin; the files it changed. Throws a message to show. */
+function linkOpencode(remove) {
+  const changed = [];
+  if (remove) {
+    if (readText(OPENCODE.cli()).includes(OPENCODE.entry) && withEntry(OPENCODE.cli(), "plugins", OPENCODE.entry, true)) changed.push(OPENCODE.cli());
+    if (readText(OPENCODE.tui()).includes(OPENCODE.tuiEntry) && withEntry(OPENCODE.tui(), "plugin", OPENCODE.tuiEntry, true)) changed.push(OPENCODE.tui());
+    if (isOpencodeStub()) { rmSync(OPENCODE.folder(), { recursive: true, force: true }); changed.push(OPENCODE.folder()); }
+    return changed;
+  }
+  if (!isOpencodeStub()) {
+    if (lstatSync(OPENCODE.folder(), { throwIfNoEntry: false })) throw new Error(`${OPENCODE.folder()} is not Revive's OpenCode plugin; Revive won't replace it.`);
+    mkdirSync(OPENCODE.folder(), { recursive: true });
+    writeFileSync(OPENCODE.stub(), opencodeStub());
+    changed.push(OPENCODE.stub());
+  } else if (save(OPENCODE.stub(), opencodeStub())) changed.push(OPENCODE.stub());
+  if (withEntry(OPENCODE.cli(), "plugins", OPENCODE.entry, false)) changed.push(OPENCODE.cli());
+  // 1.x's list; a tui.jsonc with comments isn't JSON and is left alone (2.x doesn't need it).
+  if (existsSync(OPENCODE.tui())) {
+    try { if (withEntry(OPENCODE.tui(), "plugin", OPENCODE.tuiEntry, false)) changed.push(OPENCODE.tui()); }
+    catch (err) { if (!(err instanceof InvalidJson)) throw err; }
+  }
+  return changed;
+}
+
 const factoryDir = () => agentDirs({ ...process.env, HOME: homedir(), USERPROFILE: homedir() }).factory;
 const cursorDir = () => agentDirs({ ...process.env, HOME: homedir(), USERPROFILE: homedir() }).cursor;
 const copilotHooks = () => join(copilotDir(), "hooks", "herdr-revive.json");
@@ -1248,6 +1308,16 @@ async function install(args, remove = false) {
       }
     } catch (err) { warnings.push(err.message); }
   }
+  if (!args.includes(OPENCODE.flag) && (remove ? existsSync(opencodeDir()) : opencodePresent())) {
+    try {
+      const files = linkOpencode(remove);
+      changed.push(...files);
+      if (!remove && files.length) notes.push("OpenCode loads the plugin the next time it starts.");
+    } catch (err) {
+      if (err instanceof InvalidJson) notes.push(`Skipped OpenCode: ${tilde(err.path)} is not valid JSON; fix it and run ${remove ? "uninstall" : "install"} again.`);
+      else warnings.push(err.message);
+    }
+  }
   if (!args.includes("--no-shell")) {
     const kindOf = (rc) => Object.keys(RC).find((k) => RC[k]() === rc) ?? null;
     for (const rc of remove ? ALL_RC() : shells(args).map((s) => RC[s]()).filter(Boolean)) {
@@ -1348,6 +1418,7 @@ export function doctorReport() {
     engine: ENGINE,
     ...hooks,
     ...Object.fromEntries(EXTENSION_AGENTS.map((key) => [key, existsSync(EXTENSIONS[key].dir()) ? safe(() => isExtension(key, extensionPath(key))) : null])),
+    opencode: opencodePresent() ? safe(() => isOpencodeStub() && (readJson(OPENCODE.cli()).plugins ?? []).includes(OPENCODE.entry)) : null,
     shell: Object.fromEntries(Object.entries(RC).map(([s, rc]) => [s, safe(() => { const f = rc(); return Boolean(f) && readText(f).includes(BEGIN); })])),
   };
   // Windows: whether PowerShell runs a profile at all (see executionPolicy).

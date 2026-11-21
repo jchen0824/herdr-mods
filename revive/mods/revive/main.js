@@ -448,7 +448,7 @@ export default class Revive extends View {
         : entry.unrecorded ? (forks ? "Started before Revive was installed: it can be forked, but won't come back by itself."
           : "Started before Revive was installed: it won't come back by itself.") : null,
       running && !forks ? `${agent?.name ?? rec.agent} can't fork a session.` : null,
-      forks && empty ? blocked ?? (remembers ? NO_MESSAGE_UNRECORDED : NO_MESSAGE) : null,
+      forks && empty ? (blocked ?? (remembers ? NO_MESSAGE_UNRECORDED : NO_MESSAGE)) : null,
       remembers && !entry.rememberable && entry.forkable !== false ? `Revive can't remember it: ${entry.rememberWhy}.` : null,
       stuck?.folder ? `Its folder ${tilde(stuck.folder)} is missing, not yours, or writable by others, so it isn't resumed here.` : null,
       stuck?.needs ? `It ran with ${stuck.needs.join(", ")}, which Revive doesn't carry. ${stuck.needs.some((n) => !n.startsWith("-")) ? "Set it in a shell" : "Fill in the folder"} and run:` : null,
@@ -574,7 +574,7 @@ export default class Revive extends View {
     // One entry per agent: true, false, or null when that agent isn't installed.
     const agents = Object.keys(AGENTS).filter((k) => s[k] !== null && s[k] !== undefined);
     const missing = [
-      ...agents.filter((k) => !s[k]).map((k) => (k === "pi" || k === "omp" ? `${AGENTS[k].name} extension missing` : `${AGENTS[k].name} hooks missing`)),
+      ...agents.filter((k) => !s[k]).map((k) => (k === "pi" || k === "omp" ? `${AGENTS[k].name} extension missing` : k === "opencode" ? "OpenCode plugin missing" : `${AGENTS[k].name} hooks missing`)),
       ...(shells.length ? [] : ["shell block missing"]),
     ];
     if (!missing.length) {

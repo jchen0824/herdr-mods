@@ -13,6 +13,7 @@ Mods for the [Herdr](https://herdr.dev) desktop app, published to the
 | --- | --- | --- |
 | `kube/` | `kube` | OpenLens-style Kubernetes panel and log viewer |
 | `topbar-actions/` | `topbar-actions` | Review and Kubernetes buttons in the tab bar |
+| `revive/` | `revive` | Resume agents lost to a reboot; dmazlum/herdr-revive plus OpenCode |
 
 A mod runs inside Herdr (gpui-kit JavaScript on QuickJS), not Node. Its API is
 Herdr's: read `~/.config/herdr-app/AGENTS.md`, `herdr.d.ts` and `gpui-kit.d.ts`
@@ -60,6 +61,9 @@ herdr-app check ~/.config/herdr-app/mods/<name>   # Herdr's own check, on an ins
   (kind in CI's `e2e` job); it creates and deletes the `herdr-kube-e2e` namespace. CI also
   installs Herdr on Linux and runs `herdr-app check` on every mod; the rest of the UI is
   verified in the app.
+- `revive/`: dmazlum/herdr-revive (MIT, `licenses/dmazlum-herdr-revive-MIT.txt`) plus OpenCode; its own
+  tests run from that folder (`cd revive && node --test test/*.test.js`, part of `npm test`).
+  Its update check is off: merge upstream by hand, keeping the OpenCode changes.
 - `sessions/test/`: runs `scan.py` (Python 3.9+, standard library only) against made-up
   agent histories in a throwaway HOME, with a fake `opencode` on PATH for delete.
 - `kube/test/properties.test.mjs`: property-based tests (fast-check) for rules that must hold

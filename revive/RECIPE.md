@@ -4,8 +4,14 @@ Revive brings back the coding agent a Herdr terminal lost to a reboot or a herdr
 restart, in the same pane, with the same session and flags. It also forks the focused
 agent's conversation into a new session beside it. Agents: Claude Code, Codex, pi,
 oh-my-pi (`omp`), Factory Droid (`droid`), the Cursor CLI (`cursor-agent`) and GitHub
-Copilot CLI (`copilot`); Droid, Cursor and Copilot CLI are not tested end to end with a
+Copilot CLI (`copilot`), plus OpenCode (`opencode`) in this copy; Droid, Cursor and Copilot CLI are not tested end to end with a
 real reboot yet.
+
+This is [herdr-revive](https://github.com/dmazlum/herdr-revive) by Devrim Mazlum (MIT), at
+upstream commit `d61441d` (0.11.0 and one later fix), kept in
+[jchen0824/herdr-mods](https://github.com/jchen0824/herdr-mods). This copy adds OpenCode
+(its plugin, agent entry and install), refuses control characters in carried flag values,
+and turns the update check off. Upstream changes are merged by hand.
 
 ## Installing it (for the agent doing it)
 
@@ -48,6 +54,10 @@ real reboot yet.
    agent comes back by itself only after it is restarted once.
 
 ## Updating it (for the agent doing it)
+
+**This copy:** update from `revive/` in jchen0824/herdr-mods, not from upstream: an upstream
+release has no OpenCode support and would remove it. The steps below are upstream's; they
+apply to this copy with that repository and folder in place of upstream's.
 
 The dialog offers *Update the Revive mod from github.com/dmazlum/herdr-revive to its
 latest release* when a newer release is out. To do it:
@@ -180,7 +190,7 @@ latest release* when a newer release is out. To do it:
   with `[Console]::Out.WriteLine` while the console's output encoding is UTF-8 (so `↻`
   shows), then the encoding is put back.
 
-## The files
+## Built from
 
 | File | What it is |
 | --- | --- |
@@ -193,6 +203,7 @@ latest release* when a newer release is out. To do it:
 | `mods/revive/lib/extension.js` | Extensions only: what pi's and omp's extensions share (running `revive.mjs hook` one at a time, the SIGTERM/SIGHUP listener) |
 | `mods/revive/pi/revive.ts` | pi's extension: runs `revive.mjs hook` at pi's session start and end, with Claude Code's payload |
 | `mods/revive/omp/revive.ts` | omp's extension: the same for omp, which has its own extension folder and events |
+| `mods/revive/opencode/revive.js` | OpenCode's TUI plugin (this copy): runs `revive.mjs hook --agent opencode` when the shown session changes and when the TUI quits |
 | `mods/revive/package.json` | Marks the folder as ES modules for Node |
 | `mods/revive/mod.json` | Opens as a dialog; docks nowhere |
 
@@ -227,7 +238,7 @@ names, as needs, and a `--session-dir` in their `revive.flags` counts as a need 
 ## Agents
 
 One entry each in `AGENTS` (`lib/core.js`), one hook target in `HOOK_TARGETS`
-(`revive.mjs`; pi and omp: an extension in `EXTENSIONS`), and optionally a finder in `lib/sessions.js`: that is all an agent needs.
+(`revive.mjs`; pi and omp: an extension in `EXTENSIONS`; OpenCode: its plugin, `OPENCODE`), and optionally a finder in `lib/sessions.js`: that is all an agent needs.
 
 | Agent | Known by | Resume | Fork | Hooks installed into | Session id from | Carried flags |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -238,6 +249,7 @@ One entry each in `AGENTS` (`lib/core.js`), one hook target in `HOOK_TARGETS`
 | Droid | `droid`; report `droid` | `droid … --resume <id>` | `droid … --fork <id>` | `~/.factory/hooks.json` (event map, no `hooks` wrapper) if it exists, else `hooks` in `~/.factory/settings.json`; command `… hook --agent droid` | `session_id` | `--auto`, `--use-spec`, `--disable-builtin-skills` (interactive flags only: `--skip-permissions-unsafe`, `-m` and the reasoning/tool flags are `droid exec` only, and interactive droid reads them as the prompt) |
 | Cursor | `cursor-agent`, or `agent`/`node`/`index.js` under a `cursor` or `cursor-agent` folder; report `cursor`, `cursor-agent` | `cursor-agent … --resume <id>` | none | `~/.cursor/hooks.json`: `{"version": 1, "hooks": {"sessionStart": [{"command": …}], "sessionEnd": […]}}`, no timeout; command `… hook --agent cursor` | `conversation_id`; folder from `workspace_roots[0]` | `-f`/`--force`, `--yolo`, `--model` (it has no `-m`), `--sandbox`, `--mode`, `--plan` |
 | Copilot CLI | `copilot` as the first word, or the second after `node`/`bun`/`deno` (never `gh copilot`); report `copilot` | `copilot … --resume <id>` | none (`/fork` inside only) | its own file `~/.copilot/hooks/herdr-revive.json` (`$COPILOT_HOME/hooks/`): `{"version": 1, "hooks": {"SessionStart": [{"type": "command", "bash": …, "timeoutSec": 10}], "SessionEnd": […]}}`, deleted whole on uninstall; command `… hook --agent copilot` | `session_id` | `--model`, `--mode`, `--plan`, `--autopilot`, `--reasoning-effort`, `--max-autopilot-continues`, `--agent` (a name only), `--allow-all`/`--yolo`, `--allow-all-tools`, `--allow-all-paths`, `--allow-all-urls`, `--allow-tool`, `--deny-tool`, `--allow-url`, `--deny-url`, `--available-tools`, `--excluded-tools`, `--no-ask-user`, `--experimental`, `--no-experimental`, `--disable-builtin-mcps`, `--disable-mcp-server`, `--no-custom-instructions`, `--disallow-temp-dir`, `--screen-reader`, `--plain-diff`, `--no-mouse` |
+| OpenCode | `opencode` as the first word, or the second after `node`/`bun`/`deno` (npm's `opencode-ai`); report `opencode` | `opencode … --session <id>` | none | a TUI plugin: the folder `herdr-revive/` in OpenCode's config folder (`$OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`, else `~/.config/opencode`), holding a `tui.js` that loads `opencode/revive.js`, named in `cli.json` `plugins` (2.x) and, when it is there and plain JSON, `tui.jsonc` `plugin` (1.x); command `… hook --agent opencode` | `session_id` from the plugin | `--auto`, `--standalone` |
 
 Everything else on the command line is left behind: a first prompt, `--resume` itself,
 a secret (`--api-key`, Cursor's `-H`). A value flag whose value is missing, looks like
@@ -263,6 +275,7 @@ can write, and they come back unattended after a reboot.
   - omp: `--auto-approve`, `--plan-yolo`, `--approval-mode` (any value)
   - Droid: `--auto`
   - pi: `-a`/`--approve`
+  - OpenCode: `--auto`
 - Value flags that pick something by name take a plain name only, never a path: Codex's
   and omp's `--profile`, Claude Code's `--agent` (an agent definition, `plugin:name`
   allowed), omp's `--skills` (comma-separated names).
@@ -288,7 +301,7 @@ A running agent nobody recorded is found from its files: Claude Code by
 `~/.factory/sessions/<cwd, every non-alphanumeric a dash>/` written since the agent started;
 Cursor by the newest `<id>/` (folder or its `store.db`) in `~/.cursor/chats/<md5 of the
 cwd>/` written since then; Copilot CLI by the `~/.copilot/session-state/<id>/` that holds
-`inuse.<its pid>.lock`. Codex, pi and omp: not found. `adopt` records a Claude Code one
+`inuse.<its pid>.lock`. Codex, pi, omp and OpenCode: not found. `adopt` records a Claude Code one
 from the same file (see *Rules*); the others are only shown.
 
 Checked by hand with droid 1.1.0 and cursor-agent 2026.10.22 on macOS: Droid reports
@@ -322,7 +335,7 @@ doubt. `abort`, `error` and `timeout` keep it. Checked by hand on macOS 26.7: wi
 Copilot session open, a core restart (`hc server restart`) and a real reboot each kept the
 record and resumed the session.
 
-## Rules
+## How it behaves
 
 - A hook acts only for the agent in its terminal's foreground: walking up from the hook's
   process must reach the foreground pid, and the agent processes on the way (`claude`, or
@@ -537,7 +550,31 @@ record and resumed the session.
   "<file URL of mods/revive/pi/revive.ts>"`, so `../lib/extension.js` is still found from
   the real path. Uninstall removes it only when its content is exactly that.
 
+OpenCode (this copy), checked by hand with opencode 2.3.2 on macOS. OpenCode 2.x runs its
+server plugins in a background service (`opencode serve --service`), outside the terminal,
+without `HC_TERMINAL_ID`; only its TUI runs in the terminal, so Revive's is a TUI plugin.
+It exports `{ id: "herdr-revive", setup, tui }`: 2.x calls `setup(api)` (the route from
+`api.ui.router.current()`, `{ type: "session", sessionID }`; sessions from
+`api.data.session.get(id)`; the returned function on dispose), 1.x calls `tui(api)` (`api.route.current`,
+`{ name: "session", params: { sessionID } }`; `api.state.session.get(id)`;
+`api.lifecycle.onDispose`), as Herdr's own OpenCode plugin does. Only the first entry point
+loaded runs. Every 500 ms it reads the shown session and walks `parentID` up to the top of
+its family (a sub-agent's session records its parent's); when that changes it sends
+`SessionStart` with `session_id` and `cwd` (the session's `directory`, else the TUI's
+folder) to `revive.mjs hook --agent opencode`. Leaving a session for the home screen keeps
+it on record. On dispose it sends `SessionEnd` with reason `exit` and waits for the engine
+(`spawnSync`, 5 seconds), since OpenCode exits right after. `exit` is settled like
+Copilot's `user_exit`; OpenCode still in the foreground when the settle runs (the plugin
+reloaded, or a new one resuming) keeps the session. A crash or kill sends nothing and
+keeps it. With the plugin in place: the session was on record within 3 seconds of the
+first message; `kill -9` on the terminal's shell came back as `opencode --session <id>` in
+4 seconds, with the conversation; `/exit` cleared the record. Not checked: a real reboot,
+`hc server restart`, OpenCode 1.x.
+
 ## Update check
+
+This copy sets `CHECK = false`: an update from upstream would replace it, OpenCode and all.
+The rest of this section is how upstream's check works when on.
 
 - Only the dialog checks, when it opens, and at most once a day: one GET to
   `https://api.github.com/repos/dmazlum/herdr-revive/releases/latest`, with no token and
@@ -574,6 +611,7 @@ record and resumed the session.
 | `REVIVE_SETTLE_MS` | How long Copilot CLI's `user_exit` waits before checking whether the terminal outlived it (default 1500) |
 | `REVIVE_PS` | Windows: the PowerShell the engine runs its queries with (default: `pwsh` if on PATH, else `powershell`) |
 | `REVIVE_PWSH_PROFILE`, `REVIVE_POWERSHELL_PROFILE` | Windows: the profile install writes for each PowerShell, instead of the one it names (for tests: a PowerShell finds Documents from Windows, not from `USERPROFILE`) |
+| `OPENCODE_CONFIG_DIR`, `XDG_CONFIG_HOME` | Where install puts OpenCode's plugin (`<dir>/herdr-revive/`, `<dir>/cli.json`, `<dir>/tui.jsonc`), as OpenCode reads them |
 | `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `PI_CODING_AGENT_DIR`, `ZDOTDIR` | Honored when finding the files to install into; a session's own `CLAUDE_CONFIG_DIR`/`CODEX_HOME`/`PI_CODING_AGENT_DIR`/`PI_CODING_AGENT_SESSION_DIR` is recorded by name only, as a need. Without `ZDOTDIR` in the environment, `zsh -c` is asked for it (it reads `~/.zshenv`). omp, Droid and Cursor: always `~/.omp/agent`, `~/.factory` and `~/.cursor`. Copilot CLI: `COPILOT_HOME`, else `~/.copilot`; a session's own `COPILOT_HOME` is a need |
 
 Install writes through symlinks to the file they point at, keeps each file's permissions,
@@ -583,3 +621,32 @@ when another tool reformatted it or added its own groups after Revive's: other t
 own Codex integration among them) rewrite `~/.codex/hooks.json` too. Each hook has a
 10 second timeout, except Codex's `SessionEnd`, which gets 3: Codex clamps it to 3 and
 warns at every start about anything longer.
+
+## Watch out
+
+- The engine runs with the person's `node`, from hooks, the shell block and the dialog; an
+  agent's hooks only record, never start anything.
+- A carried flag comes back after a reboot with nobody watching: approval and sandbox
+  bypasses are left out of an automatic resume (each agent's `unattended`), and flags that
+  load code, instructions or other folders are never carried (*Never carried, and why*).
+- Install edits other programs' config files (Claude Code's settings, Codex's hooks, the
+  shell rc file, OpenCode's `cli.json` and `tui.jsonc`): it writes only its own entries,
+  backs a file up once as `<file>.revive-backup`, and uninstall takes out only its own.
+- Codex asks to trust new hooks at its next start; pi, omp and OpenCode load their
+  extension or plugin only when they start.
+- OpenCode's server plugins don't run in the terminal (2.x's background service); its
+  plugin must be a TUI plugin, and `hc send` text reaches OpenCode as a message, not as a
+  command: test `/exit` with `hc keys`.
+- An upstream update replaces this copy; merge upstream into it by hand.
+
+## Done when
+
+- `herdr-app check mods/revive` passes, and `node --test test/*.test.js` passes in this folder.
+- `node mods/revive/revive.mjs install` then `doctor` shows `true` for every agent that is
+  installed, OpenCode included.
+- An agent started in a Herdr terminal gets `revive.agent` and `revive.session` labels
+  (`hc get <t> --json`) after its first message.
+- `kill -9` on that terminal's shell: herdr-core gives it a fresh shell and the agent comes
+  back with `… --resume <id>` (OpenCode: `opencode --session <id>`) and its conversation.
+- Ending the agent normally (`/exit`) clears the labels, and a new shell starts nothing.
+- `cmd-shift-r` opens the dialog, which lists the remembered sessions.

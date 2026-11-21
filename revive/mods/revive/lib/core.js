@@ -400,7 +400,33 @@ export const AGENTS = {
       "--allow-url": true,
     },
   },
+  // OpenCode, checked against opencode 2.3.2. herdr-mods, not upstream Revive. It has no hooks
+  // file: a TUI plugin (opencode/revive.js) sends the hooks from inside the terminal. It can't
+  // tell /exit from a signal, so its one end reason, "exit", is settled like Copilot's
+  // user_exit. Its sessions live in its database (or its background service), not in files a
+  // flag or variable points at, so it records no needs. It has no fork.
+  opencode: {
+    name: "OpenCode",
+    bin: "opencode",
+    // `vim opencode` isn't OpenCode; `node …/bin/opencode` (npm's opencode-ai) is.
+    interpreterOnly: true,
+    apps: ["opencode"],
+    resume: (id, flags) => ["opencode", ...flags, "--session", id],
+    fork: null,
+    end: (reason) => (reason === "exit" ? "settle" : "keep"),
+    oneShot: (args) => OPENCODE_COMMANDS.has(args[0]),
+    // --server and a folder argument are left behind: a label must not point a resume at
+    // another server, and the resume runs in the recorded folder anyway.
+    carry: {
+      "--standalone": 0,
+      "--auto": 0,
+    },
+    unattended: { "--auto": true },
+  },
 };
+
+/** OpenCode's subcommands that run once and quit, or start no TUI (`mini` has no plugins). */
+const OPENCODE_COMMANDS = new Set(["upgrade", "update", "uninstall", "acp", "api", "debug", "auth", "mcp", "plugin", "models", "stats", "mini", "run", "session", "service", "reload", "pair", "serve", "export", "import", "github", "web", "agent"]);
 
 /** Copilot CLI's subcommands: each runs once and quits, with no session to resume. */
 const COPILOT_COMMANDS = new Set(["login", "logout", "help", "init", "config", "update", "version", "workflow", "sessions", "memories", "plugin", "mcp", "skill", "instruction", "lsp", "sandbox", "completion", "app"]);
