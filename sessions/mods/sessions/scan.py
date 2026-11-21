@@ -1,5 +1,5 @@
 # Sessions' scanner: lists the coding-agent sessions saved on this machine (Claude Code, Codex,
-# Kiro), newest first, as one JSON document on stdout. main.js runs it on each machine with
+# Kiro, OpenCode), newest first, as one JSON document on stdout. main.js runs it on each machine with
 # `python3 -c <this file> <action> ...`; it must run on the system python3 (3.9 on AL2023).
 #   list [--scripted] [--since <sig>]   every session (scripted runs too with --scripted); just
 #                                       {"same": true} when the list's sig is still <sig>
@@ -47,7 +47,7 @@ partial = False
 
 MODEL = re.compile(rb'"model":"([^"]+)"')
 STAMP = re.compile(rb'"timestamp":"([^"]+)"')
-ID = re.compile(r"^(sess_)?[0-9A-Fa-f][0-9A-Fa-f-]{7,63}$")
+ID = re.compile(r"^((sess_)?[0-9A-Fa-f][0-9A-Fa-f-]{7,63}|ses_[0-9A-Za-z]{8,64})$")
 # The start of a JSON string, at most PROMPT_CAP characters (escapes whole): prompts can be
 # megabytes (a bot pasting a whole chat back in), and only their start is kept.
 STR = re.compile(rb'"((?:[^"\\]|\\.){0,%d})' % PROMPT_CAP)
@@ -463,6 +463,72 @@ def kiro(idx, rows):
             rows.append(row("kiro", sid, s, meta.get("title"), meta.get("cwd"), ms(meta.get("updated")) or t.state["mtime"] * 1000))
 
 
+# OpenCode: one SQLite database, ~/.local/share/opencode/opencode*.db (or $XDG_DATA_HOME). Sessions
+# are in session_v2 (older versions: session); the prompts typed are its user messages. Child
+# sessions (sub-agents) and archived ones are left out. Each session's prompts are written to its
+# text file again only when the session changed.
+def opencode(idx, rows):
+    data = os.environ.get("XDG_DATA_HOME") or os.path.join(HOME, ".local", "share")
+    dbs = [p for p in glob.glob(os.path.join(data, "opencode", "opencode*.db")) if not p.endswith(("-shm", "-wal"))]
+    for db in sorted(dbs, key=os.path.getmtime):
+        con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=2)
+        try:
+            tables = {r[0] for r in con.execute("select name from sqlite_master where type = 'table'")}
+            if "session_v2" in tables:
+                sessions = "select id, directory, title, model, time_updated from session_v2 where parent_id is null and time_archived is null"
+                prompts = "select session_id, data from session_message where type = 'user' order by session_id, seq"
+                text = lambda d: d.get("text")
+            elif {"session", "message", "part"} <= tables:  # 1.x
+                sessions = "select id, directory, title, null, time_updated from session where parent_id is null" + (
+                    " and time_archived is null" if "time_archived" in {r[1] for r in con.execute("pragma table_info(session)")} else "")
+                prompts = ("select p.session_id, p.data from part p join message m on m.id = p.message_id "
+                           "where json_extract(m.data, '$.role') = 'user' order by p.session_id, m.time_created, p.id")
+                text = lambda d: d.get("text") if d.get("type") == "text" and not d.get("synthetic") else None
+            else:
+                continue
+            said = {}
+            for sid, raw in con.execute(prompts):
+                try:
+                    t = one_line(text(json.loads(raw)))
+                except (ValueError, AttributeError):
+                    continue
+                if t:
+                    said.setdefault(sid, []).append(t[:PROMPT_CAP])
+            for sid, cwd, title, model, updated in con.execute(sessions):
+                typed = said.get(sid)
+                if not typed:
+                    continue
+                try:
+                    model = (json.loads(model) or {}).get("id") if model else None
+                except (ValueError, AttributeError):
+                    model = None
+                first = typed[0]
+                s = {"first": first[:SNIP], "last": typed[-1][:SNIP] if len(typed) > 1 else None, "model": model, "n": len(typed)}
+                title = one_line(title)
+                if title.startswith(("New session - ", "Child session - ")) or title == first:
+                    title = None
+                rows.append(row("opencode", sid, s, title, cwd, updated))
+                key = "opencode:" + sid
+                p = text_path(key)
+                idx.seen.add(p)
+                old = idx.files.get(p)
+                if not old or old.get("upd") != updated or not os.path.exists(p):
+                    os.makedirs(TEXT, exist_ok=True)
+                    out, size = [], 0
+                    for t in typed:
+                        if size >= TEXT_CAP:
+                            break
+                        out.append(t)
+                        size += len(t) + 1
+                    with open(p, "w") as f:
+                        f.write("\n".join(out)[:TEXT_CAP] + "\n")
+                    idx.files[p] = {"key": key, "upd": updated}
+                    idx.dirty = True
+        finally:
+            con.close()
+
+
+
 REAL = {}
 
 
@@ -486,7 +552,7 @@ def row(agent, sid, s, title, cwd, updated):
 def scan():
     idx = Index()
     rows, errors = [], []
-    for name, fn in (("claude", claude), ("codex", codex), ("kiro", kiro)):
+    for name, fn in (("claude", claude), ("codex", codex), ("kiro", kiro), ("opencode", opencode)):
         try:
             fn(idx, rows)
         except Exception as e:  # one agent's surprise shouldn't hide the others
@@ -518,7 +584,7 @@ def run(argv, cwd):
 
 
 def delete(agent, sid, engine, cwd):
-    """Deletes one session for good: Codex and Kiro with their own commands (which also fix their
+    """Deletes one session for good: Codex, Kiro and OpenCode with their own commands (which also fix their
     indexes), Claude Code (which has none per session) by removing what `claude purge` would."""
     if not ID.match(sid):
         raise ValueError("not a session id: %r" % sid)
@@ -536,6 +602,10 @@ def delete(agent, sid, engine, cwd):
                 os.remove(p)
     elif agent == "codex":
         run(["codex", "delete", "--force", sid], where)
+    elif agent == "opencode":
+        if not sid.startswith("ses_"):
+            raise ValueError("not an OpenCode session id: %r" % sid)
+        run(["opencode", "session", "delete", sid], where)
     elif agent == "kiro":
         base = os.path.join(HOME, ".kiro", "sessions")
         left = lambda: glob.glob(os.path.join(base, "*", sid)) if engine == "v3" else [p for p in [os.path.join(base, "cli", sid + ".json")] if os.path.exists(p)]
