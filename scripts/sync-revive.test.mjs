@@ -92,3 +92,27 @@ test("a dirty working tree is refused", () => {
   writeFileSync(join(repo, "stray.txt"), "x\n");
   assert.throws(() => execFileSync("node", [SCRIPT, "--json"], { cwd: repo, env: ENV, stdio: "pipe" }), /working tree has changes/);
 });
+
+test("a patch git can't apply (upstream deleted a file this copy changed) fails and keeps the base", () => {
+  const { up, repo, base, run } = setup();
+  git(up, "rm", "-q", "mods/revive/lib/core.js");
+  write(up, { "mods/revive/other.js": "x\n" });
+  git(up, "add", "-A");
+  git(up, "commit", "-qm", "drop core.js");
+  assert.throws(() => run("--ref", "main"), /don't apply[\s\S]*core\.js/);
+  assert.equal(git(repo, "status", "--porcelain"), "", "the tree is put back");
+  assert.equal(JSON.parse(readFileSync(join(repo, "revive/UPSTREAM.json"), "utf8")).base, base);
+});
+
+test("--ref takes an upstream branch other than the default one", () => {
+  const { up, repo, run } = setup();
+  git(up, "switch", "-q", "-c", "feature");
+  write(up, { "mods/revive/feature.js": "f\n" });
+  git(up, "add", "-A");
+  git(up, "commit", "-qm", "feature work");
+  git(up, "switch", "-q", "main");
+  assert.throws(() => run("--ref", "no-such-thing"), /no tag, branch or commit no-such-thing/);
+  const out = run("--ref", "feature");
+  assert.deepEqual(out.conflicts, []);
+  assert.equal(readFileSync(join(repo, "revive/mods/revive/feature.js"), "utf8"), "f\n");
+});

@@ -44,7 +44,10 @@ function main() {
     git(["clone", "--quiet", "--no-checkout", opt("--from") ?? `https://github.com/${state.repo}.git`, tmp]);
     const up = (argv) => git(["-C", tmp, ...argv]).trim();
     const ref = opt("--ref") ?? newestTag(up(["tag", "--list"]).split("\n")) ?? "origin/HEAD";
-    const target = up(["rev-parse", `${ref}^{commit}`]);
+    // A tag, a commit, or a branch: only the default branch is checked out, others are origin/<name>.
+    const resolve = (name) => { try { return up(["rev-parse", "--verify", "--quiet", `${name}^{commit}`]); } catch { return ""; } };
+    const target = resolve(ref) || resolve(`origin/${ref}`);
+    if (!target) throw new Error(`no tag, branch or commit ${ref} upstream`);
     const out = { upToDate: false, base: state.base, target, ref, commits: [], conflicts: [], licenseChanged: false };
 
     // Already in: the target is the base or one of its ancestors.
@@ -65,8 +68,18 @@ function main() {
       git(["fetch", "--quiet", "--no-tags", tmp, "refs/sync/target:refs/sync/revive-target", "refs/sync/base:refs/sync/revive-base"]);
       git(["update-ref", "-d", "refs/sync/revive-target"]);
       git(["update-ref", "-d", "refs/sync/revive-base"]);
+      // A conflict leaves markers and unmerged paths; a patch git can't apply at all (upstream
+      // deleted a file this copy changed, say) says "error:" and applies nothing. That must not
+      // pass for a clean sync: put the tree back, keep the base, and fail.
       try { git(["apply", "--3way", "--whitespace=nowarn", "--directory=revive"], { input: diff, stdio: ["pipe", "pipe", "pipe"] }); }
-      catch { /* conflicts: listed below */ }
+      catch (err) {
+        const errors = String(err.stderr ?? "").split("\n").filter((l) => l.startsWith("error:"));
+        if (errors.length) {
+          git(["reset", "--hard", "--quiet"]);
+          git(["clean", "-fdq"]);
+          throw new Error(`upstream's changes don't apply; merge them by hand (base stays ${state.base.slice(0, 7)}):\n${errors.join("\n")}`);
+        }
+      }
       out.conflicts = git(["diff", "--name-only", "--diff-filter=U"]).split("\n").filter(Boolean);
     }
 
