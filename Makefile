@@ -1,4 +1,4 @@
-.PHONY: check test e2e herdr-check hooks
+.PHONY: check test e2e herdr-check hooks sync-revive
 
 check:
 	node scripts/check-mods.mjs
@@ -15,6 +15,10 @@ e2e:
 # Herdr's own check of every mod (needs herdr-app; CI installs it).
 herdr-check:
 	for m in */mods/*/; do herdr-app check "$$m" || exit 1; done
+
+# Bring upstream herdr-revive's newest release into revive/ (REF=<tag|branch|sha> for another).
+sync-revive:
+	node scripts/sync-revive.mjs $(if $(REF),--ref $(REF))
 
 hooks:
 	git config core.hooksPath .githooks

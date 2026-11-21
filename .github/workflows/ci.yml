@@ -5,6 +5,8 @@ on:
     types: [opened, edited, synchronize, reopened]
   push:
     branches: [main]
+  # The Revive upstream workflow starts CI on its branch: a PR it opens doesn't start it.
+  workflow_dispatch:
 
 permissions:
   contents: read

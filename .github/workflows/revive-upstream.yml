@@ -1,0 +1,128 @@
+name: Revive upstream
+
+# Every Monday (and by hand): bring upstream herdr-revive's newest release into revive/ with
+# scripts/sync-revive.mjs and open, or update, one pull request on the branch
+# chore/revive-upstream. A PR opened with the workflow token doesn't start CI by itself, so this
+# workflow starts ci.yml on that branch; its checks show on the PR.
+
+on:
+  schedule:
+    - cron: "17 2 * * 1"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Upstream tag, branch or commit (default: the newest release)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: write
+
+concurrency:
+  group: revive-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      BRANCH: chore/revive-upstream
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - run: npm ci
+
+      - name: Apply upstream's changes
+        id: sync
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          node scripts/sync-revive.mjs --json ${REF:+--ref "$REF"} > "$RUNNER_TEMP/sync.json"
+          cat "$RUNNER_TEMP/sync.json"
+          node -e '
+            const s = require(process.argv[1]);
+            const fs = require("fs");
+            const out = [`up_to_date=${s.upToDate}`, `target=${s.target}`, `ref=${s.ref}`, `conflicts=${s.conflicts.length}`];
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, out.join("\n") + "\n");
+          ' "$RUNNER_TEMP/sync.json"
+
+      - name: Skip when this target already has an open PR
+        id: open
+        if: steps.sync.outputs.up_to_date == 'false'
+        run: |
+          pr=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+          same=false
+          if [ -n "$pr" ] && git fetch -q origin "$BRANCH" 2>/dev/null; then
+            base=$(git show "origin/$BRANCH:revive/UPSTREAM.json" | node -e 'let t="";process.stdin.on("data",c=>t+=c).on("end",()=>console.log(JSON.parse(t).base))')
+            [ "$base" = "${{ steps.sync.outputs.target }}" ] && same=true
+          fi
+          echo "same=$same" >> "$GITHUB_OUTPUT"
+
+      - name: Check, commit and push
+        id: push
+        if: steps.sync.outputs.up_to_date == 'false' && steps.open.outputs.same != 'true'
+        run: |
+          git switch -C "$BRANCH"
+          git add -A
+          check=skipped
+          if [ "${{ steps.sync.outputs.conflicts }}" = "0" ]; then
+            if make check > "$RUNNER_TEMP/check.log" 2>&1; then check=passed; else check=failed; fi
+          fi
+          echo "check=$check" >> "$GITHUB_OUTPUT"
+          {
+            echo "chore(revive): sync upstream herdr-revive to ${{ steps.sync.outputs.ref }}"
+            echo
+            node -e 'const s=require(process.argv[1]); console.log(`Upstream ${s.base.slice(0,7)}..${s.target.slice(0,7)}:`); for (const c of s.commits) console.log(`- ${c}`)' "$RUNNER_TEMP/sync.json"
+          } > "$RUNNER_TEMP/message.txt"
+          git commit -q -F "$RUNNER_TEMP/message.txt"
+          git push -f origin "HEAD:$BRANCH"
+
+      - name: Open or update the pull request, and start CI
+        if: steps.push.outcome == 'success'
+        env:
+          PR: ${{ steps.open.outputs.pr }}
+          CHECK: ${{ steps.push.outputs.check }}
+        run: |
+          node -e '
+            const s = require(process.argv[1]);
+            const check = process.env.CHECK;
+            const repo = "https://github.com/dmazlum/herdr-revive";
+            const lines = [
+              `Brings upstream [herdr-revive](${repo}) ${s.base.slice(0, 7)}..${s.target.slice(0, 7)} (\`${s.ref}\`) into \`revive/\` with \`scripts/sync-revive.mjs\`: a three-way merge that keeps this copy\x27s own changes (OpenCode, the control-character check, the update check off).`,
+              "",
+              `[Compare upstream](${repo}/compare/${s.base}...${s.target})`,
+              "",
+              "## Upstream commits",
+              ...s.commits.map((c) => `- ${c}`),
+              "",
+              "## Status",
+              s.conflicts.length
+                ? `**Conflicts** (committed with markers; resolve them on this branch):\n${s.conflicts.map((f) => `- \`${f}\``).join("\n")}`
+                : "No conflicts.",
+              s.licenseChanged ? "- Upstream\x27s LICENSE changed: `licenses/dmazlum-herdr-revive-MIT.txt` updated." : "",
+              `- \`make check\` on the runner: **${check}**`,
+              "",
+              "Before merging: read the upstream changes against this copy (README, RECIPE and the OpenCode pieces are ours), and run the OpenCode crash test if the engine or install changed.",
+              "",
+              "Opened by the Revive upstream workflow.",
+            ];
+            require("fs").writeFileSync(process.env.RUNNER_TEMP + "/body.md", lines.filter((l, i, a) => l !== "" || a[i - 1] !== "").join("\n") + "\n");
+          ' "$RUNNER_TEMP/sync.json"
+          title="chore(revive): sync upstream herdr-revive to ${{ steps.sync.outputs.ref }}"
+          draft=""
+          if [ "${{ steps.sync.outputs.conflicts }}" != "0" ] || [ "$CHECK" = "failed" ]; then draft="--draft"; fi
+          if [ -n "$PR" ]; then
+            gh pr edit "$PR" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+          else
+            gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$RUNNER_TEMP/body.md" $draft
+          fi
+          gh workflow run ci.yml --ref "$BRANCH"
