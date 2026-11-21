@@ -4,7 +4,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, chmodSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -76,7 +76,7 @@ test("start, a switch, and the end reach the engine as Claude-shaped hooks", () 
   globalThis.setInterval = (fn) => { tick = fn; return realSetInterval(() => {}, 1 << 30); };
   let stop;
   try {
-    stop = track({ route: () => state.route, get: (id) => state.sessions.get(id), cwd: () => "/fallback", send: (p, o) => state.sent.push([p, o]) });
+    stop = track({ route: () => state.route, get: (id) => state.sessions.get(id), cwd: () => "/fallback", send: (p) => state.sent.push([p]) });
   } finally { globalThis.setInterval = realSetInterval; }
 
   state.sessions.set("ses_root", { id: "ses_root", directory: "/w/app" });
@@ -91,11 +91,38 @@ test("start, a switch, and the end reach the engine as Claude-shaped hooks", () 
   tick();
   stop();
 
-  assert.deepEqual(state.sent.map(([p, o]) => [p.hook_event_name, p.session_id, p.cwd, p.reason ?? null, Boolean(o?.wait)]), [
-    ["SessionStart", "ses_root", "/w/app", null, false],
-    ["SessionStart", "ses_other", "/fallback", null, false],
-    ["SessionEnd", "ses_other", "/fallback", "exit", true],
+  assert.deepEqual(state.sent.map(([p]) => [p.hook_event_name, p.session_id, p.cwd, p.reason ?? null]), [
+    ["SessionStart", "ses_root", "/w/app", null],
+    ["SessionStart", "ses_other", "/fallback", null],
+    ["SessionEnd", "ses_other", "/fallback", "exit"],
   ]);
+});
+
+test("each hook finishes before the next starts, even when the engine is slow", async () => {
+  // The plugin and a fake engine in a mod folder of their own: the first start takes longest.
+  const mod = mkdtempSync(join(tmpdir(), "revive-opencode-mod-"));
+  mkdirSync(join(mod, "opencode"));
+  copyFileSync("mods/revive/opencode/revive.js", join(mod, "opencode", "revive.js"));
+  const log = join(mod, "log");
+  writeFileSync(join(mod, "revive.mjs"), `import fs from "node:fs";
+let text = ""; for await (const c of process.stdin) text += c;
+const p = JSON.parse(text);
+if (p.session_id === "ses_a") await new Promise((r) => setTimeout(r, 400));
+fs.appendFileSync(${JSON.stringify(log)}, p.hook_event_name + " " + p.session_id + "\\n");
+`);
+  const { track: realTrack } = await import(pathToFileURL(join(mod, "opencode", "revive.js")));
+  const sessions = new Map([["ses_a", { id: "ses_a" }], ["ses_b", { id: "ses_b" }]]);
+  let route = "ses_a";
+  let tick;
+  const realSetInterval = globalThis.setInterval;
+  globalThis.setInterval = (fn) => { tick = fn; return realSetInterval(() => {}, 1 << 30); };
+  let stop;
+  try { stop = realTrack({ route: () => route, get: (id) => sessions.get(id) }); }
+  finally { globalThis.setInterval = realSetInterval; }
+  route = "ses_b";
+  tick();
+  stop();
+  assert.equal(readFileSync(log, "utf8"), "SessionStart ses_a\nSessionStart ses_b\nSessionEnd ses_b\n");
 });
 
 test("the plugin does nothing outside a herdr terminal", () => {

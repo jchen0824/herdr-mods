@@ -15,7 +15,7 @@
 // Dependency-free: OpenCode 2.x calls `setup(api)` (api.ui.router, api.data.session) and 1.x
 // calls `tui(api)` (api.route, api.state.session), like Herdr's own OpenCode plugin.
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -26,20 +26,16 @@ const POLL_MS = 500;
 // Both entry points may be loaded (a 2.x that also reads tui.jsonc): only the first one runs.
 const RUNNING = Symbol.for("herdr-revive.opencode");
 
-/** Runs `revive.mjs hook --agent opencode` with the payload on stdin; never fails. */
-function hook(payload, { wait = false } = {}) {
-  const args = [ENGINE, "hook", "--agent", "opencode"];
-  const input = JSON.stringify(payload);
+/**
+ * Runs `revive.mjs hook --agent opencode` with the payload on stdin, and waits for it; never
+ * fails. Waiting keeps the hooks in order: two starts run at once could write their labels in
+ * either order and leave the session before a switch on record, and the end must come after
+ * them, with OpenCode exiting right after it. One run takes about a tenth of a second, and
+ * only when the shown session changes.
+ */
+function hook(payload) {
   try {
-    // At the end, OpenCode exits right after: wait for the engine, which starts its own settle process.
-    if (wait) return void spawnSync("node", args, { input, stdio: ["pipe", "ignore", "ignore"], timeout: 5_000 });
-    const child = spawn("node", args, { stdio: ["pipe", "ignore", "ignore"] });
-    const timer = setTimeout(() => child.kill(), 10_000);
-    timer.unref?.();
-    child.on("error", () => clearTimeout(timer));
-    child.on("close", () => clearTimeout(timer));
-    child.stdin.on("error", () => {});
-    child.stdin.end(input);
+    spawnSync("node", [ENGINE, "hook", "--agent", "opencode"], { input: JSON.stringify(payload), stdio: ["pipe", "ignore", "ignore"], timeout: 5_000 });
   } catch { /* a hook never fails the agent */ }
 }
 
@@ -78,7 +74,7 @@ export function track({ route, get, cwd = () => process.cwd(), send = hook, ever
   timer.unref?.();
   return () => {
     clearInterval(timer);
-    if (recorded) send({ hook_event_name: "SessionEnd", reason: "exit", session_id: recorded, cwd: directory }, { wait: true });
+    if (recorded) send({ hook_event_name: "SessionEnd", reason: "exit", session_id: recorded, cwd: directory });
     recorded = null;
   };
 }

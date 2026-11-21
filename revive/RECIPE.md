@@ -562,8 +562,10 @@ loaded runs. Every 500 ms it reads the shown session and walks `parentID` up to 
 its family (a sub-agent's session records its parent's); when that changes it sends
 `SessionStart` with `session_id` and `cwd` (the session's `directory`, else the TUI's
 folder) to `revive.mjs hook --agent opencode`. Leaving a session for the home screen keeps
-it on record. On dispose it sends `SessionEnd` with reason `exit` and waits for the engine
-(`spawnSync`, 5 seconds), since OpenCode exits right after. `exit` is settled like
+it on record. On dispose it sends `SessionEnd` with reason `exit`. Every hook waits for the
+engine (`spawnSync`, 5 seconds, about 0.1 s in practice): two starts run at once after a
+quick switch could write their labels out of order and leave the earlier session on
+record, and the end must come after them, with OpenCode exiting right after it. `exit` is settled like
 Copilot's `user_exit`; OpenCode still in the foreground when the settle runs (the plugin
 reloaded, or a new one resuming) keeps the session. A crash or kill sends nothing and
 keeps it. With the plugin in place: the session was on record within 3 seconds of the
