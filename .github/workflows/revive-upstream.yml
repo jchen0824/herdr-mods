@@ -122,6 +122,8 @@ jobs:
           if [ "${{ steps.sync.outputs.conflicts }}" != "0" ] || [ "$CHECK" = "failed" ]; then draft="--draft"; fi
           if [ -n "$PR" ]; then
             gh pr edit "$PR" --title "$title" --body-file "$RUNNER_TEMP/body.md"
+            # The draft state follows this sync: a draft with conflicts or a failed check, else ready.
+            if [ -n "$draft" ]; then gh pr ready "$PR" --undo || true; else gh pr ready "$PR" || true; fi
           else
             gh pr create --base main --head "$BRANCH" --title "$title" --body-file "$RUNNER_TEMP/body.md" $draft
           fi
