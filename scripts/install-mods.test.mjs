@@ -68,3 +68,16 @@ test("a symlinked installed mod is backed up as its files, before they change", 
   assert.equal(readFileSync(join(h, backup, "topbar-actions", "main.js"), "utf8"), "// my custom code\n");
   assert.equal(readFileSync(join(real, "main.js"), "utf8"), readFileSync("topbar-actions/mods/topbar-actions/main.js", "utf8"));
 });
+
+test("each run backs up into a folder of its own, even within the same second", () => {
+  const h = home(), to = join(h, "mods");
+  runNode(h, to, "--mod", "topbar-actions");
+  writeFileSync(join(to, "topbar-actions", "main.js"), "// first\n");
+  runNode(h, to, "--mod", "topbar-actions");
+  writeFileSync(join(to, "topbar-actions", "main.js"), "// second\n");
+  runNode(h, to, "--mod", "topbar-actions");
+  const backups = readdirSync(h).filter((d) => d.startsWith("herdr-mods-backup-")).map((d) => readFileSync(join(h, d, "topbar-actions", "main.js"), "utf8"));
+  assert.deepEqual(backups.sort(), ["// first\n", "// second\n"]);
+  assert.match(runNode(h, to, "--mod", "topbar-actions"), /Every mod is up to date/);
+  assert.equal(readdirSync(h).filter((d) => d.startsWith("herdr-mods-backup-")).length, 2, "no backup folder when nothing changed");
+});

@@ -4,7 +4,7 @@
 //   node scripts/install-mods.mjs [--dry] [--mod <name>[,<name>…]] [--to <mods folder>]
 //
 // - Mods that are already the same are left alone; the others are backed up to
-//   ~/herdr-mods-backup-<time>/<name>/ before they change, then checked with `herdr-app check`.
+//   ~/herdr-mods-backup-<time>-<random>/<name>/ before they change, then checked with `herdr-app check`.
 // - A mod's settings the person keeps in the installed copy (KEEP, such as Sessions'
 //   config.json) are never overwritten once they exist there.
 // - Nothing is deleted: files only the installed copy has are listed, not removed.
@@ -12,7 +12,7 @@
 //   not run, and layouts, keys.json and settings.json aren't touched. Every mod here has
 //   "place": "none", so a newly installed one shows only where a layout names it.
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -61,7 +61,9 @@ function main() {
   const mods = repoMods().filter((m) => !only || only.includes(m.name));
   if (only) for (const name of only) if (!mods.some((m) => m.name === name)) throw new Error(`no mod ${name} in this repository`);
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const backup = join(homedir(), `herdr-mods-backup-${stamp}`);
+  // One folder per run, made when the first mod needs it: a timestamp alone repeats within a second.
+  let backup = null;
+  const backupDir = () => (backup ??= mkdtempSync(join(homedir(), `herdr-mods-backup-${stamp}-`)));
   const changed = [];
   for (const mod of mods) {
     const target = join(to, mod.name);
@@ -76,7 +78,7 @@ function main() {
     if (dry) continue;
     // The files themselves, also when the installed mod (or a file in it) is a symlink: the copy
     // below writes through a link, and a backup of the link would show the new code.
-    if (!fresh) cpSync(realpathSync(target), join(backup, mod.name), { recursive: true, dereference: true });
+    if (!fresh) cpSync(realpathSync(target), join(backupDir(), mod.name), { recursive: true, dereference: true });
     for (const file of write) {
       mkdirSync(dirname(join(target, file)), { recursive: true });
       cpSync(join(mod.dir, file), join(target, file));
@@ -85,7 +87,7 @@ function main() {
   }
   if (dry) { console.log("Dry run: nothing written."); return; }
   if (!changed.length) { console.log("Every mod is up to date."); return; }
-  if (existsSync(backup)) console.log(`Backup of the previous copies: ${backup}`);
+  if (backup) console.log(`Backup of the previous copies: ${backup}`);
   let failed = 0;
   for (const name of changed) {
     try {
