@@ -2,7 +2,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -115,4 +115,13 @@ test("--ref takes an upstream branch other than the default one", () => {
   const out = run("--ref", "feature");
   assert.deepEqual(out.conflicts, []);
   assert.equal(readFileSync(join(repo, "revive/mods/revive/feature.js"), "utf8"), "f\n");
+});
+
+test("it runs from a folder whose path has a space", () => {
+  const { up, repo } = setup();
+  const dir = join(mkdtempSync(join(tmpdir(), "sync-")), "my scripts");
+  mkdirSync(dir);
+  copyFileSync(SCRIPT, join(dir, "sync-revive.mjs"));
+  const out = JSON.parse(execFileSync("node", [join(dir, "sync-revive.mjs"), "--from", up, "--json"], { cwd: repo, env: ENV, encoding: "utf8" }));
+  assert.equal(out.upToDate, true);
 });
