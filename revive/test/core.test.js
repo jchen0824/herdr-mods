@@ -1,0 +1,469 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, chmodSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  AGENTS, agentKey, needsOf, needsHint, carriedFlags, isOneShot, validId, command, shQuote, shJoin, readRecord, labelArgs, clearArgs,
+  stateOf, shouldResume, ownShell, isShell, promptShell, idleWrappedShell, resumeScript, attendedFlags, ago, printfLine,
+  canRestore, restores, resumeLine, needsCommand, resumeScriptPwsh,
+} from "../mods/revive/lib/core.js";
+import { POSIX_HARNESS } from "./helpers/platform.js";
+
+/** What a terminal shows: the text without its colors. */
+const plain = (s) => s.replace(/\x1b\[[0-9;]*m/g, "");
+
+const ID = "9e458eb4-72c3-41c2-88bf-2f7f79f3716f";
+const labels = (o) => Object.fromEntries(Object.entries(o).map(([k, v]) => [`revive.${k}`, String(v)]));
+
+test("agents are known by their report or their command line", () => {
+  assert.equal(agentKey("claude-code"), "claude");
+  assert.equal(agentKey("codex"), "codex");
+  assert.equal(agentKey(null, ["claude", "--model", "opus"]), "claude");
+  assert.equal(agentKey(null, ["/opt/homebrew/bin/claude"]), "claude");
+  assert.equal(agentKey(null, ["node", "/usr/local/lib/node_modules/@openai/codex/bin/codex"]), "codex");
+  assert.equal(agentKey(null, ["/bin/zsh", "-l"]), null);
+  assert.equal(agentKey("pi"), "pi");
+  assert.equal(agentKey(null, ["pi", "--model", "sonnet"]), "pi");
+  assert.equal(agentKey(null, ["/nix/store/x/bin/pi"]), "pi");
+  for (const argv of [["ssh", "pi"], ["vim", "pi"], ["less", "/tmp/pi"]]) assert.equal(agentKey(null, argv), null, argv.join(" "));
+  assert.equal(agentKey("vim", ["vim"]), null);
+});
+
+test("only the launch flags worth keeping are carried, values included", () => {
+  assert.deepEqual(
+    carriedFlags("claude", ["claude", "--permission-mode", "plan", "--model", "haiku", "--resume", "x", "fix the bug"]),
+    ["--permission-mode", "plan", "--model", "haiku"],
+  );
+  assert.deepEqual(carriedFlags("claude", ["claude", "--model=opus", "-p", "hi"]), ["--model=opus"]);
+  assert.deepEqual(carriedFlags("codex", ["node", "/x/codex", "--no-daemon", "-m", "gpt-5", "-s", "workspace-write", "task"]), ["--no-daemon", "-m", "gpt-5", "-s", "workspace-write"]);
+  // A value flag without its value is dropped, not carried bare.
+  assert.deepEqual(carriedFlags("claude", ["claude", "--model"]), []);
+  assert.deepEqual(carriedFlags("nope", ["x", "--model", "y"]), []);
+  assert.deepEqual(
+    carriedFlags("pi", ["pi", "--provider", "anthropic", "--model", "sonnet", "--thinking", "high", "-t", "read,bash", "-e", "/x/ext.ts", "--session", "x", "fix it"]),
+    ["--provider", "anthropic", "--model", "sonnet", "--thinking", "high", "-t", "read,bash"],
+  );
+});
+
+test("permission and sandbox modes come back as they ran", () => {
+  const same = {
+    claude: [["--dangerously-skip-permissions"], ["--allow-dangerously-skip-permissions"], ["--permission-mode", "bypassPermissions"], ["--permission-mode=bypassPermissions"]],
+    codex: [["--dangerously-bypass-approvals-and-sandbox"], ["--yolo"], ["--full-auto"], ["--approve-for-me"], ["-a", "never"], ["--ask-for-approval", "never"],
+      ["-s", "danger-full-access"], ["--sandbox=danger-full-access"]],
+    pi: [["-a"], ["--approve"]],
+    omp: [["--auto-approve"], ["--approval-mode", "yolo"], ["--approval-mode=yolo"], ["--plan-yolo"]],
+    droid: [["--auto", "high"]],
+    cursor: [["-f"], ["--force"], ["--yolo"], ["--sandbox", "disabled"]],
+  };
+  for (const [key, cases] of Object.entries(same)) {
+    for (const flags of cases) assert.deepEqual(carriedFlags(key, ["x", ...flags]), flags, `${key} ${flags.join(" ")}`);
+  }
+  // Read back from a label, too.
+  assert.deepEqual(readRecord(labels({ agent: "codex", session: ID, flags: '["--dangerously-bypass-approvals-and-sandbox","-s","danger-full-access"]' })).flags,
+    ["--dangerously-bypass-approvals-and-sandbox", "-s", "danger-full-access"]);
+});
+
+test("flags that load code, configuration, instructions or folders are never carried", () => {
+  const never = {
+    claude: [["--settings", "/s.json"], ["--settings={\"hooks\":{}}"], ["--mcp-config", "/m.json"], ["--plugin-dir", "/p"], ["--add-dir", "/"], ["--add-dir=/"],
+      ["--append-system-prompt", "x"], ["--system-prompt", "x"]],
+    codex: [["-c", "x=y"], ["--config", "x=y"], ["--dangerously-bypass-hook-trust"], ["--profile", "../x"]],
+    pi: [["-e", "/x.ts"], ["--extension", "/x.ts"], ["--skill", "/s"], ["--system-prompt", "x"], ["--append-system-prompt", "x"], ["--session-dir", "/s"]],
+    omp: [["-e", "/x.ts"], ["--extension", "/x.ts"], ["--hook", "/h.ts"], ["--config", "/c.yml"], ["--add-dir", "/"], ["--allow-home"], ["--session-dir", "/s"],
+      ["--system-prompt", "x"], ["--system-prompt-template", "x"], ["--append-system-prompt", "x"], ["--api-key", "k"], ["--profile", "../../x"]],
+    droid: [["--settings", "/s.json"], ["--append-system-prompt", "x"], ["--append-system-prompt-file", "/p"]],
+    cursor: [["--approve-mcps"], ["--plugin-dir", "/p"], ["--api-key", "k"], ["--workspace", "/tmp/evil"], ["--workspace=/tmp/evil"]],
+  };
+  for (const [key, cases] of Object.entries(never)) {
+    for (const flags of cases) assert.deepEqual(carriedFlags(key, ["x", ...flags]), [], `${key} ${flags.join(" ")}`);
+  }
+});
+
+test("a value that looks like a flag is not taken as a value", () => {
+  // `--model --settings /s.json` must not carry --settings as the model's value.
+  assert.deepEqual(carriedFlags("claude", ["claude", "--model", "--settings", "/s.json", "--agent", "rev"]), ["--agent", "rev"]);
+  assert.deepEqual(carriedFlags("omp", ["omp", "--model", "-e", "/x.ts"]), []);
+});
+
+test("a first prompt named like an object's own property is not a flag", () => {
+  for (const word of ["constructor", "toString", "__proto__", "hasOwnProperty", "valueOf"]) {
+    assert.deepEqual(carriedFlags("claude", ["claude", word]), [], word);
+    assert.deepEqual(carriedFlags("claude", ["claude", `--${word}=x`]), [], word);
+  }
+});
+
+test("a new shell with an old shell's pid is still a new shell", () => {
+  const rec = readRecord(labels({ agent: "claude", session: ID, shell: 812, since: "Sat Oct 31 18:49:55 2026" }));
+  assert.equal(shouldResume(rec, { pid: 812, since: "Sun Nov 1 09:02:11 2026", shellPid: 812 }).go, true, "pid reused after a reboot");
+  assert.equal(shouldResume(rec, { pid: 812, since: "Sat Oct 31 18:49:55 2026", shellPid: 812 }).go, false);
+  assert.equal(shouldResume(rec, { pid: 812, since: null, shellPid: 812 }).go, false, "no start time: pids decide");
+  assert.equal(stateOf(rec, { live: false, pid: 812, since: "Sun Nov 1 09:02:11 2026" }), "lost");
+  assert.equal(stateOf(rec, { live: false, pid: 812, since: "Sat Oct 31 18:49:55 2026" }), "interrupted");
+});
+
+test("session ids are checked, not quoted", () => {
+  assert.ok(validId(ID));
+  assert.ok(!validId(""));
+  assert.ok(!validId("abc; rm -rf ~"));
+  assert.ok(!validId("$(id)"));
+  assert.ok(!validId("-rf"));
+  assert.ok(!validId(42));
+});
+
+test("resume and fork commands per agent", () => {
+  assert.deepEqual(command({ agent: "claude", session: ID, flags: ["--model", "opus"] }, "resume"), ["claude", "--model", "opus", "--resume", ID]);
+  assert.deepEqual(command({ agent: "claude", session: ID, flags: [] }, "fork"), ["claude", "--resume", ID, "--fork-session"]);
+  assert.deepEqual(command({ agent: "codex", session: ID, flags: ["--no-daemon"] }, "resume"), ["codex", "resume", "--no-daemon", ID]);
+  assert.deepEqual(command({ agent: "codex", session: ID, flags: [] }, "fork"), ["codex", "fork", ID]);
+  assert.deepEqual(command({ agent: "pi", session: ID, flags: ["--model", "sonnet"] }, "resume"), ["pi", "--model", "sonnet", "--session", ID]);
+  assert.deepEqual(command({ agent: "pi", session: ID, flags: [] }, "fork"), ["pi", "--fork", ID]);
+  // A config folder is never set from a record: the resuming shell's own counts.
+  assert.deepEqual(command({ agent: "pi", session: ID, env: { PI_CODING_AGENT_DIR: "/p" } }), ["pi", "--session", ID]);
+  assert.equal(command({ agent: "claude", session: "x y" }), null);
+  assert.equal(command({ agent: "vim", session: ID }), null);
+  assert.equal(command(null), null);
+});
+
+test("shell quoting survives the shell", POSIX_HARNESS, () => {
+  const words = ["plain", "with space", "it's", "$HOME", "`id`", "a\"b", "", "--model=opus"];
+  const out = execFileSync("sh", ["-c", `printf '%s\\n' ${shJoin(words)}`], { encoding: "utf8" });
+  assert.deepEqual(out.split("\n").slice(0, -1), words);
+  assert.equal(shQuote("simple/path-1.2"), "simple/path-1.2");
+});
+
+test("labels read back as a record", () => {
+  // `ended` from older versions is read past.
+  const rec = readRecord(labels({ agent: "claude", session: ID, cwd: "/w", flags: '["--model","opus"]', shell: 41, at: 5, ended: "other" }));
+  assert.deepEqual(rec, { agent: "claude", session: ID, cwd: "/w", flags: ["--model", "opus"], needs: [], transcript: null, shell: 41, since: null, at: 5, resumed: null, failed: null, auto: true, restore: false });
+  assert.equal(readRecord({}), null);
+  assert.equal(readRecord(undefined), null);
+  assert.deepEqual(readRecord(labels({ session: ID, flags: "{broken" })).flags, []);
+  // Flags read back pass the carry list again: a label is not proof Revive wrote it.
+  assert.deepEqual(readRecord(labels({ agent: "claude", session: ID, flags: '["--dangerously-skip-permissions","--settings","/s.json","--model","opus","--mcp-config","/m.json"]' })).flags, ["--dangerously-skip-permissions", "--model", "opus"]);
+  assert.deepEqual(readRecord(labels({ agent: "omp", session: ID, flags: '["-e","/x.ts","--model","opus","--hook","/h.ts"]' })).flags, ["--model", "opus"]);
+  assert.deepEqual(readRecord(labels({ session: ID, flags: '["--model","opus"]' })).flags, [], "no agent, no carry list");
+  assert.deepEqual(readRecord(labels({ agent: "claude", session: ID, flags: '{"0":"--settings"}' })).flags, []);
+  assert.equal(readRecord(labels({ session: ID, auto: "off" })).auto, false);
+});
+
+test("label arguments set, and empty values remove", () => {
+  assert.deepEqual(labelArgs({ session: ID, ended: null, shell: 3 }), [`revive.session=${ID}`, "revive.ended=", "revive.shell=3"]);
+  const cleared = clearArgs();
+  assert.ok(cleared.includes("revive.session="));
+  assert.ok(!cleared.some((a) => a.startsWith("revive.auto")), "the person's auto choice outlives a session");
+  assert.ok(!cleared.some((a) => a.startsWith("revive.restore")), "and so does the restore choice");
+});
+
+// #60: omp's --restore, opt-in per terminal.
+test("only omp can go on with an interrupted turn, and only when the terminal opted in", () => {
+  assert.deepEqual(Object.keys(AGENTS).filter(canRestore), ["omp"]);
+  assert.equal(readRecord(labels({ agent: "omp", session: ID, restore: "on" })).restore, true);
+  for (const v of [undefined, "off", "yes", ""]) assert.equal(readRecord(labels({ agent: "omp", session: ID, restore: v })).restore, false, String(v));
+  const omp = { agent: "omp", session: ID, cwd: "/w", flags: ["--model", "m"] };
+  assert.deepEqual(command(omp), ["omp", "--model", "m", "--resume", ID], "--resume stays the default");
+  assert.deepEqual(command({ ...omp, restore: true }), ["omp", "--model", "m", "--restore", ID]);
+  assert.deepEqual(command({ ...omp, restore: true }, "fork"), ["omp", "--model", "m", "--fork", ID], "a fork is never a restore");
+  assert.equal(restores({ ...omp, restore: true }), true);
+  // Another agent's terminal may carry the label from an omp session before it: it does nothing there.
+  assert.equal(restores({ agent: "claude", session: ID, restore: true }), false);
+  assert.deepEqual(command({ agent: "claude", session: ID, flags: [], restore: true }), ["claude", "--resume", ID]);
+});
+
+test("a restoring resume says so, keeps the rest of the resume's rules, and is quoted the same way", () => {
+  const rec = { agent: "omp", session: ID, cwd: "/w", flags: ["--auto-approve", "--model", "m"], needs: [], restore: true };
+  assert.equal(resumeLine(rec), `cd -- /w && omp --auto-approve --model m --restore ${ID}`, "by hand, as --resume keeps its flags");
+  assert.match(resumeLine(rec, { unattended: true }), new RegExp(`' omp --model m --restore ${ID}$`), "automatically, without the flags that lift approvals");
+  assert.equal(needsCommand({ ...rec, needs: ["PI_CODING_AGENT_DIR"] }), `cd -- /w && omp --auto-approve --model m --restore ${ID}`);
+  for (const script of [resumeScript(rec, "/e"), resumeScriptPwsh(rec, "/e")]) {
+    assert.match(script, /--restore/);
+    assert.match(script, /going on with its unfinished turn \(--restore\): it may run its tools again/);
+    assert.match(script, new RegExp(`(' |& )omp --model m --restore ${ID}`), "without --auto-approve");
+  }
+  for (const script of [resumeScript({ ...rec, restore: false }, "/e"), resumeScriptPwsh({ ...rec, restore: false }, "/e")]) {
+    assert.doesNotMatch(script, /--restore|unfinished turn/);
+  }
+});
+
+test("where a session stands", () => {
+  const rec = readRecord(labels({ agent: "claude", session: ID, shell: 100 }));
+  assert.equal(stateOf(rec, { live: true, pid: 100 }), "running");
+  assert.equal(stateOf(rec, { live: false, pid: 200 }), "lost");
+  assert.equal(stateOf(rec, { live: false, pid: 100 }), "interrupted");
+  assert.equal(stateOf({ ...rec, failed: 9 }, { live: false, pid: 200 }), "failed");
+  assert.equal(stateOf(null, { live: false, pid: 1 }), null);
+});
+
+test("a Claude Code session started in Code Mode comes back only where Code Mode is on", () => {
+  const MODE = "CLAUDE_CODE_EXPERIMENTAL_CODE_MODE";
+  assert.deepEqual(needsOf("claude", ["claude"], { [MODE]: "1", PATH: "/bin" }), [MODE]);
+  assert.deepEqual(needsOf("claude", ["claude"], { CLAUDE_CONFIG_DIR: "/h/.claude-work", [MODE]: "1" }), ["CLAUDE_CONFIG_DIR", MODE]);
+  assert.deepEqual(needsOf("claude", ["claude"], { [MODE]: "" }), []);
+  assert.deepEqual(needsOf("claude", ["claude"], { [MODE]: "0" }), [], "0 is Code Mode off");
+  assert.deepEqual(needsOf("codex", ["codex"], { [MODE]: "1" }), [], "Claude Code's alone");
+  const rec = readRecord(labels({ agent: "claude", session: ID, shell: 100, needs: JSON.stringify([MODE]) }));
+  assert.deepEqual(rec.needs, [MODE]);
+  assert.equal(shouldResume(rec, { pid: 200, shellPid: 200 }).go, false, "a shell without Code Mode doesn't resume it");
+  assert.equal(shouldResume(rec, { pid: 200, shellPid: 200, env: { [MODE]: "1" } }).go, true, "one with it on does");
+  assert.equal(shouldResume(rec, { pid: 200, shellPid: 200, env: { [MODE]: "0" } }).go, false, "one with it set to 0 doesn't");
+  assert.equal(needsHint(rec), `Set ${MODE}=1, then run: claude --resume ${ID}`);
+  assert.doesNotMatch(resumeScript({ ...rec, cwd: "/w" }, "/e"), new RegExp(MODE), "its value is never carried");
+});
+
+test("a shell resumes only its own terminal's lost session", () => {
+  const rec = readRecord(labels({ agent: "claude", session: ID, shell: 100 }));
+  assert.equal(shouldResume(rec, { pid: 200, shellPid: 200 }).go, true);
+  assert.equal(shouldResume(rec, { pid: 100, shellPid: 100 }).go, false, "same shell: the agent quit, nothing was lost");
+  assert.equal(shouldResume(rec, { pid: 200, shellPid: 333 }).go, false, "a shell started inside the terminal");
+  assert.equal(shouldResume(rec, { pid: 200, shellPid: 200, env: { REVIVE_AUTO: "0" } }).go, false);
+  assert.equal(shouldResume({ ...rec, auto: false }, { pid: 200, shellPid: 200 }).go, false);
+  assert.equal(shouldResume({ ...rec, session: "bad id" }, { pid: 200, shellPid: 200 }).go, false);
+  assert.equal(shouldResume({ ...rec, agent: "vim" }, { pid: 200, shellPid: 200 }).go, false);
+  assert.equal(shouldResume(rec, { pid: null, shellPid: 200 }).go, false);
+  assert.equal(shouldResume(null, { pid: 1, shellPid: 1 }).go, false);
+});
+
+test("a resume that failed is not tried again at the next restart", () => {
+  const rec = readRecord(labels({ agent: "claude", session: ID, shell: 100, failed: 9 }));
+  const verdict = shouldResume(rec, { pid: 200, shellPid: 200 });
+  assert.equal(verdict.go, false);
+  assert.equal(verdict.why, "the last resume failed");
+});
+
+test("a run that answers and quits is told from a session", () => {
+  assert.equal(isOneShot("claude", ["claude", "-p", "summarize"]), true);
+  assert.equal(isOneShot("claude", ["/usr/local/bin/claude", "--model", "opus", "--print", "hi"]), true);
+  assert.equal(isOneShot("claude", ["node", "/x/bin/claude", "-p", "hi"]), true);
+  assert.equal(isOneShot("claude", ["claude", "--model", "opus"]), false);
+  assert.equal(isOneShot("claude", ["claude", "--permission-mode", "plan"]), false, "a flag that only contains p");
+  assert.equal(isOneShot("codex", ["codex", "exec", "fix it"]), true);
+  assert.equal(isOneShot("codex", ["codex", "e", "fix it"]), true);
+  assert.equal(isOneShot("codex", ["codex", "-p", "work"]), false, "codex's -p is --profile");
+  assert.equal(isOneShot("codex", ["codex", "resume", ID]), false);
+  assert.equal(isOneShot("pi", ["pi", "-p", "hi"]), true);
+  assert.equal(isOneShot("pi", ["pi", "--mode", "json", "hi"]), true);
+  assert.equal(isOneShot("pi", ["pi", "--mode=rpc"]), true);
+  assert.equal(isOneShot("pi", ["pi", "--no-session"]), true, "nothing saved, nothing to bring back");
+  assert.equal(isOneShot("pi", ["pi", "--mode", "text", "--model", "sonnet"]), false);
+  assert.equal(isOneShot("vim", ["vim", "-p"]), false);
+});
+
+test("Codex batch subcommands are recognized after options, without treating option values as commands", () => {
+  for (const args of [
+    ["--model", "o3", "exec", "fix it"],
+    ["--no-daemon", "-s", "workspace-write", "e", "fix it"],
+    ["--config", 'model="o3"', "--model=o3", "exec", "fix it"],
+    ["-C", "/work", "--enable", "hooks", "exec", "fix it"],
+  ]) assert.equal(isOneShot("codex", ["codex", ...args]), true, args.join(" "));
+  for (const args of [
+    ["--profile", "exec"], ["--model", "e"], ["--add-dir", "exec"],
+    ["resume", ID, "exec"], ["--", "exec"], ["explain exec"],
+  ]) assert.equal(isOneShot("codex", ["codex", ...args]), false, args.join(" "));
+});
+
+test("a session keeps its agent's config folder, and only that", () => {
+  assert.deepEqual(needsOf("claude", ["claude"], { CLAUDE_CONFIG_DIR: "/h/.claude-work", CODEX_HOME: "/c", PATH: "/bin" }), ["CLAUDE_CONFIG_DIR"]);
+  assert.deepEqual(needsOf("codex", ["codex"], { CODEX_HOME: "/c" }), ["CODEX_HOME"]);
+  assert.deepEqual(needsOf("claude", ["claude"], { CLAUDE_CONFIG_DIR: "" }), []);
+  // Older records held values: neither they nor a variable the agent doesn't declare are used.
+  const rec = readRecord(labels({ agent: "claude", session: ID, env: JSON.stringify({ CLAUDE_CONFIG_DIR: "/h/my work", LD_PRELOAD: "/evil.so" }) }));
+  assert.equal("env" in rec, false);
+  assert.deepEqual(rec.needs, ["CLAUDE_CONFIG_DIR"]);
+  assert.deepEqual(command(rec), ["claude", "--resume", ID]);
+  assert.deepEqual(command(rec, "fork"), ["claude", "--resume", ID, "--fork-session"]);
+  assert.doesNotMatch(resumeScript({ ...rec, cwd: "/w" }, "/e"), /CLAUDE_CONFIG_DIR/);
+  assert.deepEqual(readRecord(labels({ agent: "claude", session: ID, env: "{broken" })).needs, []);
+  assert.deepEqual(readRecord(labels({ agent: "claude", session: ID, needs: '["CLAUDE_CONFIG_DIR","LD_PRELOAD","--settings"]' })).needs, ["CLAUDE_CONFIG_DIR"]);
+  assert.deepEqual(command(readRecord(labels({ agent: "claude", session: ID }))), ["claude", "--resume", ID], "no variables, no env");
+});
+
+test("the resume script runs the agent in its folder and reports a quick failure", POSIX_HARNESS, () => {
+  const dir = mkdtempSync(join(tmpdir(), "revive-"));
+  const work = join(dir, "it's here");
+  execFileSync("mkdir", ["-p", work]);
+  // A fake agent that records where and how it ran, then fails like a missing session.
+  writeFileSync(join(dir, "claude"), `#!/bin/sh\npwd -P > "${dir}/where"\nprintf '%s\\n' "$@" > "${dir}/argv"\nprintf '%s' "$REVIVE_RESUME" > "${dir}/context"\nexit 1\n`);
+  writeFileSync(join(dir, "node"), `#!/bin/sh\necho "$2" > "${dir}/node"\n`);
+  chmodSync(join(dir, "claude"), 0o755);
+  chmodSync(join(dir, "node"), 0o755);
+  const rec = { agent: "claude", session: ID, cwd: work, flags: ["--dangerously-skip-permissions", "--model", "opus"] };
+  const script = resumeScript(rec, "/x/revive.mjs");
+  // No terminal to hand over: everything runs on the shell's own output.
+  const env = { ...process.env, PATH: `${dir}:${process.env.PATH}`, REVIVE_TTY: join(dir, "missing", "tty") };
+  const out = execFileSync("bash", ["-c", script], { encoding: "utf8", env });
+  assert.match(plain(out), /↻ Revive {2}resuming Claude Code session 9e458eb4 · REVIVE_AUTO=0 skips this/);
+  assert.match(out, /\x1b\[1;34m↻ Revive\x1b\[0m/, "Revive in bold blue");
+  assert.equal(readFileSync(join(dir, "where"), "utf8").trim(), execFileSync("sh", ["-c", `cd "${work}" && pwd -P`], { encoding: "utf8" }).trim());
+  assert.deepEqual(readFileSync(join(dir, "argv"), "utf8").trim().split("\n"), ["--model", "opus", "--resume", ID]);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "context"), "utf8")), { agent: rec.agent, session: ID, flags: rec.flags });
+  assert.equal(readFileSync(join(dir, "node"), "utf8").trim(), "failed");
+  assert.equal(resumeScript({ agent: "claude", session: "x;y" }, "/x"), "");
+});
+
+test("the agent is handed the terminal, even when the shell's output is held", POSIX_HARNESS, () => {
+  const dir = mkdtempSync(join(tmpdir(), "revive-"));
+  // The agent reports whether its stdout is the terminal device it was given.
+  writeFileSync(join(dir, "claude"), `#!/bin/sh\necho "agent ran"\nexit 0\n`);
+  chmodSync(join(dir, "claude"), 0o755);
+  const tty = join(dir, "tty");
+  writeFileSync(tty, "");
+  const script = resumeScript({ agent: "claude", session: ID, cwd: null, flags: [] }, "/x/revive.mjs");
+  const out = execFileSync("sh", ["-c", script], { encoding: "utf8", env: { ...process.env, PATH: `${dir}:${process.env.PATH}`, REVIVE_TTY: tty } });
+  assert.equal(out, "", "nothing on the held output");
+  const seen = readFileSync(tty, "utf8");
+  assert.match(plain(seen), /↻ Revive {2}resuming/);
+  assert.match(seen, /agent ran/);
+});
+
+test("ago", () => {
+  assert.equal(ago(null), "");
+  assert.equal(ago(1000, 1000 + 30_000), "just now");
+  assert.equal(ago(0 + 1, 1 + 5 * 60_000), "5m ago");
+  assert.equal(ago(1, 1 + 3 * 3600_000), "3h ago");
+  assert.equal(ago(1, 1 + 2 * 86400_000), "2d ago");
+});
+
+test("a 0.4.0 record with --session-dir in its flags needs it", () => {
+  const rec = readRecord(labels({ agent: "pi", session: ID, flags: '["--session-dir","/s","--model","m"]' }));
+  assert.deepEqual(rec.flags, ["--model", "m"]);
+  assert.deepEqual(rec.needs, ["--session-dir"]);
+  assert.equal(shouldResume(rec, { pid: 2, shellPid: 2, env: {} }).go, false);
+  assert.deepEqual(readRecord(labels({ agent: "omp", session: ID, flags: '["--session-dir=/s"]' })).needs, ["--session-dir"]);
+  assert.deepEqual(readRecord(labels({ agent: "claude", session: ID, flags: '["--session-dir","/s"]' })).needs, [], "only the agent's own findIn flags");
+});
+
+test("a record that can't be resumed by hand says why, and what to run", async () => {
+  const { unresumable, needsCommand } = await import("../mods/revive/lib/core.js");
+  assert.equal(unresumable({ agent: "claude", session: ID, needs: [] }), null);
+  assert.deepEqual(unresumable({ agent: "claude", session: ID, needs: [], cwdRefused: "/gone" }), { folder: "/gone" });
+  assert.deepEqual(unresumable({ agent: "claude", session: ID, needs: ["CLAUDE_CONFIG_DIR"] }), { needs: ["CLAUDE_CONFIG_DIR"] });
+  assert.equal(needsCommand({ agent: "claude", session: ID, cwd: "/w", flags: [], needs: ["CLAUDE_CONFIG_DIR"] }), `cd -- /w && claude --resume ${ID}`);
+  assert.equal(needsCommand({ agent: "pi", session: ID, cwd: null, flags: [], needs: ["--session-dir"] }), `pi --session-dir <folder> --session ${ID}`);
+  assert.equal(needsCommand({ agent: "nope", session: ID, needs: ["X"] }), null);
+});
+
+test("an automatic resume leaves out the flags that lift approvals or the sandbox", () => {
+  const rec = (agent, flags) => readRecord(labels({ agent, session: ID, flags: JSON.stringify(flags) }));
+  const cases = [
+    ["claude", ["--dangerously-skip-permissions", "--model", "opus"], ["--model", "opus"], ["--dangerously-skip-permissions"]],
+    ["claude", ["--allow-dangerously-skip-permissions"], [], ["--allow-dangerously-skip-permissions"]],
+    ["claude", ["--permission-mode", "bypassPermissions"], [], ["--permission-mode bypassPermissions"]],
+    ["claude", ["--permission-mode=acceptEdits"], [], ["--permission-mode=acceptEdits"]],
+    ["claude", ["--permission-mode", "auto"], [], ["--permission-mode auto"]],
+    ["claude", ["--permission-mode", "plan"], ["--permission-mode", "plan"], []],
+    ["codex", ["--yolo", "-m", "o3"], ["-m", "o3"], ["--yolo"]],
+    ["codex", ["--dangerously-bypass-approvals-and-sandbox"], [], ["--dangerously-bypass-approvals-and-sandbox"]],
+    ["codex", ["-a", "never", "-s", "danger-full-access"], [], ["-a never", "-s danger-full-access"]],
+    ["codex", ["--ask-for-approval=never", "--sandbox=danger-full-access"], [], ["--ask-for-approval=never", "--sandbox=danger-full-access"]],
+    ["codex", ["-a", "on-request", "-s", "workspace-write"], ["-a", "on-request", "-s", "workspace-write"], []],
+    ["cursor", ["--force", "-f", "--yolo", "--sandbox", "disabled", "--model", "gpt-5"], ["--model", "gpt-5"], ["--force", "-f", "--yolo", "--sandbox disabled"]],
+    ["cursor", ["--sandbox", "enabled"], ["--sandbox", "enabled"], []],
+    ["omp", ["--auto-approve", "--plan-yolo", "--approval-mode", "x", "--model", "m"], ["--model", "m"], ["--auto-approve", "--plan-yolo", "--approval-mode x"]],
+    ["droid", ["--auto", "high", "--use-spec"], ["--use-spec"], ["--auto high"]],
+    ["pi", ["-a", "--approve", "--no-approve"], ["--no-approve"], ["-a", "--approve"]],
+  ];
+  for (const [agent, flags, kept, dropped] of cases) {
+    const r = rec(agent, flags);
+    assert.deepEqual(attendedFlags(agent, r.flags), { kept, dropped }, `${agent} ${flags.join(" ")}`);
+    // By hand (the dialog), the session comes back the way it ran; automatically, without them.
+    assert.deepEqual(command(r), AGENTS[agent].resume(ID, flags), `${agent}: kept by hand`);
+    assert.deepEqual(command(r, "resume", { unattended: true }), AGENTS[agent].resume(ID, kept), `${agent}: left out`);
+  }
+  const script = resumeScript(rec("claude", ["--dangerously-skip-permissions", "--permission-mode", "bypassPermissions"]), "/e");
+  // Its own line, in yellow, under the note.
+  assert.match(script, /\\033\[33m%s\\033\[0m\\n' ' {2}without --dangerously-skip-permissions, --permission-mode bypassPermissions \(only a resume from the Revive dialog keeps them\)'/);
+  assert.match(script, /claude --resume 9e458eb4/);
+  assert.doesNotMatch(resumeScript(rec("claude", ["--model", "opus"]), "/e"), /without/);
+});
+
+test("--agent and omp's --skills take names, not paths", () => {
+  assert.deepEqual(carriedFlags("claude", ["claude", "--agent", "reviewer"]), ["--agent", "reviewer"]);
+  assert.deepEqual(carriedFlags("claude", ["claude", "--agent", "my-plugin:reviewer"]), ["--agent", "my-plugin:reviewer"]);
+  for (const bad of ["../../evil", "/tmp/a.md", "a/b", "a..b", "x y"]) {
+    assert.deepEqual(carriedFlags("claude", ["claude", "--agent", bad]), [], bad);
+    assert.deepEqual(carriedFlags("claude", ["claude", `--agent=${bad}`]), [], bad);
+  }
+  assert.deepEqual(carriedFlags("omp", ["omp", "--skills", "commit,review"]), ["--skills", "commit,review"]);
+  for (const bad of ["anything,../x", "/x", "a,", ",a", "*"]) assert.deepEqual(carriedFlags("omp", ["omp", "--skills", bad]), [], bad);
+});
+
+test("a shell is the terminal's own when it is its program, or a wrapper's child", () => {
+  const ps = (rows) => new Map(rows.map(([pid, ppid, ...argv]) => [pid, { ppid, since: "", argv }]));
+  // Kiro CLI: the terminal's program is the pty wrapper; the real shell is its child.
+  const kiro = ps([[36493, 1, "zsh", "(kiro-cli-term)"], [36580, 36493, "/bin/zsh", "--login"]]);
+  assert.equal(ownShell(kiro, 36493, 36493).own, true, "the program itself");
+  assert.equal(ownShell(kiro, 36580, 36493).own, true, "the wrapper's child");
+  // `script` started from a profile: shell → script → the terminal's shell.
+  const script = ps([[10, 1, "-zsh"], [11, 10, "script", "-q", "/dev/null"], [12, 11, "zsh"]]);
+  assert.equal(ownShell(script, 12, 10).own, true);
+  // A shell typed in the terminal's shell, which ran Revive's block and exported its pid.
+  const byHand = ps([[10, 1, "-zsh"], [20, 10, "zsh"]]);
+  assert.equal(ownShell(byHand, 20, 10, "10").own, false);
+  assert.match(ownShell(byHand, 20, 10, "10").why, /inside the terminal's own shell/);
+  // One more level down: the marker is the middle shell's.
+  const deeper = ps([[10, 1, "-zsh"], [20, 10, "zsh"], [30, 20, "bash"]]);
+  assert.equal(ownShell(deeper, 30, 10, "20").own, false);
+  // Another shell on the way, even without a marker.
+  assert.equal(ownShell(deeper, 30, 10).own, false);
+  // A marker a core kept from the shell that started it is not on the way.
+  assert.equal(ownShell(kiro, 36580, 36493, "999").own, true);
+  // Not under the terminal at all, or no terminal pid.
+  assert.equal(ownShell(kiro, 36580, 77).own, false);
+  assert.equal(ownShell(kiro, 36580, null).own, false);
+});
+
+test("shells are recognized by name, login or not", () => {
+  for (const argv of [["zsh"], ["-zsh"], ["/bin/bash", "--login"], ["/usr/local/bin/fish"], ["sh", "-c", "x"]]) assert.equal(isShell(argv), true, argv[0]);
+  for (const argv of [["script"], ["node", "x"], ["claude"], [], undefined]) assert.equal(isShell(argv), false, String(argv?.[0]));
+});
+
+test("the shell's notes use ANSI's own colors, and their text never reaches the format", POSIX_HARNESS, () => {
+  const line = printfLine([["accent", "↻ Revive"], [null, " 100% done, it's fine"], ["dim", " hint"]]);
+  // The texts are arguments: a % or a quote in them prints as it is.
+  assert.match(line, /^printf '\\033\[1;34m%s\\033\[0m%s\\033\[2m%s\\033\[0m\\n' /);
+  const out = execFileSync("sh", ["-c", line], { encoding: "utf8" });
+  assert.equal(out, "\x1b[1;34m↻ Revive\x1b[0m 100% done, it's fine\x1b[2m hint\x1b[0m\n");
+});
+
+test("came back: running sessions resumed lately, newest first, until the person dismisses that batch", async () => {
+  const { cameBack, CAME_BACK_MS } = await import("../mods/revive/lib/core.js");
+  const now = 1_000_000_000_000;
+  const e = (address, state, resumed) => ({ address, state, rec: { agent: "claude", session: ID, resumed } });
+  const entries = [
+    e("a", "running", now - 60_000),
+    e("b", "running", now - 5_000),
+    e("c", "lost", now - 10_000), // needs you: not "came back"
+    e("d", "running", now - CAME_BACK_MS - 1), // too long ago
+    e("e", "running", null), // never resumed
+    e("f", "running", now + 60_000), // a clock in the future
+  ];
+  const back = cameBack(entries, { now });
+  assert.deepEqual(back.list.map((x) => x.address), ["b", "a"]);
+  assert.equal(back.latest, now - 5_000);
+  // Dismissed: that batch stays hidden; a newer resume shows again.
+  assert.deepEqual(cameBack(entries, { now, seen: now - 5_000 }), { list: [], latest: null });
+  const newer = [...entries, e("g", "running", now - 1_000)];
+  assert.deepEqual(cameBack(newer, { now, seen: now - 5_000 }).list.map((x) => x.address), ["g", "b", "a"]);
+  assert.deepEqual(cameBack([], { now }), { list: [], latest: null });
+});
+
+test("manual Resume types only into a wrapper's idle child shell", () => {
+  const table = (rows) => new Map(rows.map(([pid, ppid, argv]) => [pid, { pid, ppid, argv }]));
+  // A wrapper (not a shell at its prompt) runs the terminal's shell as its child.
+  const wrapped = table([[100, 1, ["/bin/sh", "/opt/wrap"]], [200, 100, ["zsh", "-l"]]]);
+  assert.equal(idleWrappedShell(wrapped, { pid: 200, argv: ["zsh", "-l"] }, 100), true);
+  // The terminal's own interactive shell: anything in front of it was started by hand.
+  const own = table([[100, 1, ["-zsh"]], [200, 100, ["sudo", "-s"]], [300, 200, ["zsh"]], [400, 100, ["zsh"]], [500, 100, ["su"]], [600, 500, ["-bash"]]]);
+  for (const fg of [{ pid: 300, argv: ["zsh"] }, { pid: 400, argv: ["zsh"] }, { pid: 600, argv: ["-bash"] }]) {
+    assert.equal(idleWrappedShell(own, fg, 100), false, fg.argv.join(" "));
+  }
+  // Busy or not a prompt shell, or outside the terminal's tree.
+  assert.equal(idleWrappedShell(wrapped, { pid: 200, argv: ["sh", "-c", "sleep 60"] }, 100), false);
+  assert.equal(idleWrappedShell(wrapped, { pid: 200, argv: ["vim"] }, 100), false);
+  assert.equal(idleWrappedShell(wrapped, { pid: 999, argv: ["zsh"] }, 100), false);
+  assert.equal(idleWrappedShell(wrapped, { pid: 100, argv: ["zsh"] }, 100), false);
+  assert.equal(promptShell(["bash", "--login", "-i"]), true);
+  assert.equal(promptShell(["bash", "-lc", "x"]), false);
+  assert.equal(promptShell(["zsh", "--command", "x"]), false);
+});
