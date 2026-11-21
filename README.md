@@ -20,6 +20,8 @@ Tell your Herdr agent:
 
 Or copy `<mod>/mods/<name>` into `~/.config/herdr-app/mods/` and run `herdr-app check` on it; each README has the details.
 
+From a clone, `git pull && make install` copies every mod into `~/.config/herdr-app/mods/` under its own name: it backs up what it changes, keeps your `config.json` files, deletes nothing and checks each updated mod. `make install DRY=1` shows what would change; `MOD=sessions,kube` limits it. Mods appear only where a layout names them, and installers such as Revive's `revive.mjs install` stay a separate step.
+
 ## Develop
 
 ```sh

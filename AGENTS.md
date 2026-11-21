@@ -77,6 +77,10 @@ herdr-app check ~/.config/herdr-app/mods/<name>   # Herdr's own check, on an ins
   `??` is never mixed with `||`/`&&` without parentheses (QuickJS rejects it), and
   Herdr's generated `jsconfig.json`/`*.d.ts` are not committed.
 - `scripts/check-commits.mjs` checks commit subjects; CI runs it on pull requests.
+- `scripts/install-mods.mjs` (`make install [DRY=1] [MOD=a,b]`): copies the tracked files of every
+  mod into `~/.config/herdr-app/mods/<name>/` under its repository name, backs up changed copies,
+  never overwrites an installed `config.json`, deletes nothing, and runs `herdr-app check` on
+  what changed. It doesn't run installers (`revive.mjs install`, Sessions' `install.py`).
 
 ## Evidence and known limitations
 

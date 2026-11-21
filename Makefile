@@ -1,4 +1,4 @@
-.PHONY: check test e2e herdr-check hooks sync-revive
+.PHONY: check test e2e herdr-check hooks sync-revive install
 
 check:
 	node scripts/check-mods.mjs
@@ -19,6 +19,11 @@ herdr-check:
 # Bring upstream herdr-revive's newest release into revive/ (REF=<tag|branch|sha> for another).
 sync-revive:
 	node scripts/sync-revive.mjs $(if $(REF),--ref $(REF))
+
+# Copy this repository's mods into ~/.config/herdr-app/mods (DRY=1: only say what would change;
+# MOD=name[,name]: only those).
+install:
+	node scripts/install-mods.mjs $(if $(DRY),--dry) $(if $(MOD),--mod $(MOD))
 
 hooks:
 	git config core.hooksPath .githooks
