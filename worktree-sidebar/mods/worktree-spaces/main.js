@@ -4,7 +4,7 @@
 // its first terminal is in now, only where unusual: branch, ahead/behind. Agent state lives in the agents list, not here. Click to
 // switch, right-click for its menu, drag to reorder.
 
-import { View, div, svg } from "gpui-kit";
+import { View, div, image, svg } from "gpui-kit";
 import { v_flex, h_flex, ScrollHandle } from "gpui-base";
 import { spaces, machines, panes, run, openOverlay, exec, hc, theme, shared, setShared, watchFolder, window, layout, checking } from "herdr";
 
@@ -290,7 +290,7 @@ export default class Spaces extends View {
 
   menu(w) {
     // A popup is as tall as its items; height is only the most.
-    openOverlay({ mod: "menu", kind: "popup", width: 200, height: 260, props: { tab: "space", target: { id: w.id } } });
+    openOverlay({ mod: "worktree-space-menu", kind: "popup", width: 200, height: 260, props: { tab: "space", target: { id: w.id } } });
   }
 
   orderingDue(now) {
@@ -444,13 +444,35 @@ export default class Spaces extends View {
       .when(g.behind > 0, (el) => el.child(div().flex_none().text_color(t.ansi1).child(`\u2193${g.behind}`)));
   }
 
+  tabIdentity(tab, lead) {
+    const program = lead?.program;
+    const shellName = `Shell ${tab.index}`;
+    let name = tab.named ? tab.name : program?.shell ? shellName : program?.name || lead?.title || `Tab ${tab.index}`;
+    if (program?.agent && (!tab.named || tab.name === program.name)) {
+      const raw = (lead.title || "").trim();
+      const title = raw.replace(/^[^\p{L}\p{N}\p{Ps}\p{Pi}~/]+/u, "").trim();
+      if (title && !/^(?:[~/]|[A-Za-z]:[\\/])/.test(title) && title !== lead.terminal && title.toLowerCase() !== program.key)
+        name = title;
+      else name = program.name;
+    }
+    const icon = program?.icon;
+    return { name, icon: icon ? (program.tint ? svg(icon) : image(icon)) : svg(lead?.mod ? "mods/files/file.svg" : "mods/workspace-chrome/terminal.svg") };
+  }
+
   spaceGroup(row, t) {
     const { w, tree } = row;
     if (!row.g?.linked || !w.tabs.length) return this.row(row, t);
     const expanded = this.expandedSpaces.has(w.id);
     const group = v_flex().flex_none().child(this.row(row, t, expanded));
     if (!expanded) return group;
-    return group.children(w.tabs.map(tab => h_flex()
+    const leads = new Map();
+    for (const pane of panes()) {
+      const current = leads.get(pane.tab);
+      if (!current || (!current.program?.agent && (pane.program?.agent || (!current.terminal && pane.terminal)))) leads.set(pane.tab, pane);
+    }
+    return group.children(w.tabs.map(tab => {
+      const { name, icon } = this.tabIdentity(tab, leads.get(tab.id));
+      return h_flex()
         .id(`space-tab-${tab.id}`)
         .h(25)
         .flex_none()
@@ -465,10 +487,12 @@ export default class Spaces extends View {
         .cursor_pointer()
         .hover(s => s.bg(t.hover).text_color(t.foreground))
         .on_click(() => run("tab.select", { id: tab.id }))
-        .child(svg("mods/workspace-chrome/terminal.svg").size(12).flex_none())
-        .child(div().flex_1().min_w(0).truncate().child(tab.named ? tab.name : `Tab ${tab.index}`))
+        .tooltip(name)
+        .child(icon.size(12).flex_none())
+        .child(div().flex_1().min_w(0).truncate().child(name))
         .when(tab.status === "blocked" || tab.status === "done", el =>
-          el.child(div().flex_none().text_color(tone(t, tab.status)).child(glyph(tab.status))))));
+          el.child(div().flex_none().text_color(tone(t, tab.status)).child(glyph(tab.status))));
+    }));
   }
 
   row({ w, i, g, tree }, t, expanded = null) {
