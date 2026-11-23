@@ -9,10 +9,15 @@
 // the tests can run it under node.
 
 /** The installed version: the same as mod.json and package.json (test/version.test.js). */
+<<<<<<< ours
 export const VERSION = "0.11.0";
 // herdr-mods: no daily check against upstream releases, which would replace this copy
 // (and its OpenCode support); upstream changes are merged here by hand.
 const CHECK = false;
+=======
+export const VERSION = "0.12.0";
+const CHECK = true;
+>>>>>>> theirs
 export const REPO = "dmazlum/herdr-revive";
 export const RELEASES = `https://github.com/${REPO}/releases`;
 export const PROMPT = `Update the Revive mod from github.com/${REPO} to its latest release`;

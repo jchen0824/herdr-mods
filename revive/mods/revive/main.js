@@ -574,7 +574,11 @@ export default class Revive extends View {
     // One entry per agent: true, false, or null when that agent isn't installed.
     const agents = Object.keys(AGENTS).filter((k) => s[k] !== null && s[k] !== undefined);
     const missing = [
+<<<<<<< ours
       ...agents.filter((k) => !s[k]).map((k) => (k === "pi" || k === "omp" ? `${AGENTS[k].name} extension missing` : k === "opencode" ? "OpenCode plugin missing" : `${AGENTS[k].name} hooks missing`)),
+=======
+      ...agents.filter((k) => !s[k]).map((k) => (k === "pi" || k === "omp" ? `${AGENTS[k].name} extension missing` : k === "muse" ? `${AGENTS[k].name} plugin missing` : `${AGENTS[k].name} hooks missing`)),
+>>>>>>> theirs
       ...(shells.length ? [] : ["shell block missing"]),
     ];
     if (!missing.length) {
