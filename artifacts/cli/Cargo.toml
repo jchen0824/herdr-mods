@@ -1,0 +1,29 @@
+[package]
+name = "herdr-artifact"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "Publish files as Herdr artifacts: versions, statuses and comment threads"
+
+[[bin]]
+name = "herdr-artifact"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Release builds use LTO and strip symbols, as herdr-core's do.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
+
+# On top of clippy's defaults (CI denies warnings).
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+redundant_clone = "warn"

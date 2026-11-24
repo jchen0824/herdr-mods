@@ -1,0 +1,17 @@
+# Format, clippy and the whole suite: what CI runs.
+check: lint test
+
+test:
+    cargo test --locked
+
+lint:
+    cargo fmt --all -- --check
+    cargo clippy --locked --all-targets -- -D warnings
+
+fmt:
+    cargo fmt --all
+
+# Build and install this checkout next to hc.
+install:
+    cargo build --release --locked
+    install -m 755 target/release/herdr-artifact "$HOME/.local/bin/herdr-artifact"

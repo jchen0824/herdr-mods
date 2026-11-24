@@ -39,6 +39,7 @@ make herdr-check                # herdr-app check on every mod (CI installs Herd
 make hooks                      # use .githooks: reject non-conventional commit subjects
 node scripts/check-commits.mjs --message 'fix(kube): retry loading clusters'
 herdr-app check ~/.config/herdr-app/mods/<name>   # Herdr's own check, on an installed copy
+cd artifacts/cli && cargo test  # herdr-artifact; `just check` adds fmt and clippy, `just install` installs it
 ```
 
 ## Skills
@@ -73,6 +74,14 @@ herdr-app check ~/.config/herdr-app/mods/<name>   # Herdr's own check, on an ins
   for any input: following logs never loses or repeats a line, paged reads return exactly the
   server's objects or an error, no secret value survives redaction, the YAML view reads back
   as the same object. A failure prints the smallest failing input and a seed to replay it.
+- `artifacts/cli/`: `herdr-artifact`, a Rust command-line program (not a mod, and not a gallery
+  entry yet). An agent publishes a file as an artifact with versions, a status and comment threads,
+  kept in `~/.herdr/artifacts`; `send` types a comment into the publishing agent's terminal through
+  `hc`, and only when that terminal reports an agent status. It follows herdr-core's conventions
+  (edition 2024, `rustfmt.toml` width 120, clippy warnings denied, deciding code in `model.rs` apart
+  from IO in `store.rs`). Its tests run the real binary against a scratch store under `/var/tmp`.
+  CI's `artifact-cli` job runs `cargo fmt --check`, `cargo clippy` and `cargo test` there;
+  `make check` does not.
 - `scripts/check-mods.mjs` checks each folder is a complete entry, every `.js` parses,
   `??` is never mixed with `||`/`&&` without parentheses (QuickJS rejects it), and
   Herdr's generated `jsconfig.json`/`*.d.ts` are not committed.
