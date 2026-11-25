@@ -15,13 +15,11 @@ clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Release builds use LTO and strip symbols, as herdr-core's do.
 [profile.release]
 lto = "fat"
 codegen-units = 1
 strip = true
 
-# On top of clippy's defaults (CI denies warnings).
 [lints.clippy]
 dbg_macro = "warn"
 todo = "warn"

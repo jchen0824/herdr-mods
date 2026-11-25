@@ -1,37 +1,28 @@
-//! The commands: each locks the store, decides with `model`, writes, and reports what it made.
-//! The CLI and the review server both call these, so they cannot disagree.
-
 use std::path::Path;
 
 use serde_json::{Value, json};
 
-use crate::agent;
-use crate::model::{Anchor, Artifact, Comment, Status, artifact_id, fnv1a};
+use crate::agent::{self, TerminalState};
+use crate::model::{Anchor, Artifact, ArtifactId, Author, Comment, Draft, Published, Status, artifact_id, fnv1a};
 use crate::store::Store;
 
-/// What a command made: JSON for programs, a line or two for people.
 pub struct Out {
     pub json: Value,
     pub text: String,
 }
 
 pub struct NewComment {
-    pub artifact: String,
-    pub body: String,
-    /// Default: the latest version.
+    pub artifact: ArtifactId,
     pub version: Option<u32>,
-    pub anchor: Option<Anchor>,
-    pub to_agent: bool,
-    pub author: String,
+    pub draft: Draft,
 }
 
-/// This terminal's address when an agent runs the command.
-pub fn terminal() -> Option<String> {
+pub fn this_terminal() -> Option<String> {
     std::env::var("HC_TERMINAL_ID").ok().filter(|t| !t.is_empty())
 }
 
-pub fn default_author() -> String {
-    terminal().unwrap_or_else(|| "user".into())
+pub fn default_author() -> Author {
+    this_terminal().map_or(Author::Person, |address| Author::Terminal { address })
 }
 
 pub fn name(status: Status) -> String {
@@ -55,10 +46,10 @@ pub fn publish(
     let id = artifact_id(source_text, stem);
 
     let _lock = store.lock()?;
-    let mut artifact = if store.exists(&id)? {
+    let mut artifact = if store.exists(&id) {
         store.artifact(&id)?
     } else {
-        Artifact::new(id.clone(), file_name.clone(), source_text.to_owned(), terminal(), now)
+        Artifact::new(id.clone(), file_name.clone(), source_text.to_owned(), this_terminal(), now)
     };
     let mut comments = store.comments(&id)?;
     if let Some(missing) = resolves.iter().find(|r| !comments.comments.iter().any(|c| &c.id == *r)) {
@@ -67,12 +58,12 @@ pub fn publish(
     if let Some(title) = title {
         artifact.title = title;
     }
-    let (version, is_new) = artifact.publish(&file_name, &format!("{:016x}", fnv1a(&content)), note, resolves, now);
+    let published = artifact.publish(&file_name, &format!("{:016x}", fnv1a(&content)), note, resolves, now);
+    let version = published.version();
     artifact.status = status;
-    let path = if is_new {
-        store.snapshot(&id, version, &file_name, &content)?
-    } else {
-        store.version_path(&id, version, &file_name)?
+    let path = match published {
+        Published::New(n) => store.snapshot(&id, n, &file_name, &content)?,
+        Published::Unchanged(n) => store.version_path(&id, n, &file_name),
     };
     for resolved in resolves {
         if let Some(comment) = comments.get(resolved) {
@@ -84,12 +75,15 @@ pub fn publish(
     }
     store.save_artifact(&artifact)?;
 
-    let what =
-        if is_new { format!("published {id} v{version}") } else { format!("{id} is unchanged since v{version}") };
+    let what = match published {
+        Published::New(n) => format!("published {id} v{n}"),
+        Published::Unchanged(n) => format!("{id} is unchanged since v{n}"),
+    };
     let closed = if resolves.is_empty() { String::new() } else { format!(", resolved {}", resolves.join(" ")) };
     Ok(Out {
         text: format!("{what}{closed}"),
-        json: json!({ "id": id, "version": version, "new": is_new, "path": path, "status": status, "resolved": resolves }),
+        json: json!({ "id": id, "version": version, "new": matches!(published, Published::New(_)), "path": path,
+                      "status": status, "resolved": resolves }),
     })
 }
 
@@ -114,13 +108,14 @@ pub fn list(store: &Store, status: Option<Status>) -> Result<Out, String> {
         .iter()
         .map(|(a, open)| {
             json!({ "id": a.id, "title": a.title, "kind": a.kind, "status": a.status, "version": a.latest(),
-                    "updated": a.updated, "terminal": a.terminal, "source": a.source, "open_comments": open })
+                    "updated": a.updated, "first_publisher": a.first_publisher, "source": a.source,
+                    "open_comments": open })
         })
         .collect();
     Ok(Out { text, json })
 }
 
-pub fn show(store: &Store, id: &str) -> Result<Out, String> {
+pub fn show(store: &Store, id: &ArtifactId) -> Result<Out, String> {
     let artifact = store.artifact(id)?;
     let comments = store.comments(id)?;
     let mut text = format!(
@@ -140,7 +135,6 @@ pub fn show(store: &Store, id: &str) -> Result<Out, String> {
     Ok(Out { text, json: json!({ "artifact": artifact, "comments": comments.comments }) })
 }
 
-/// A comment and its replies, the way an agent reads them.
 fn thread(c: &Comment) -> String {
     let state = match (c.open, c.resolved_in) {
         (true, _) => "open".to_owned(),
@@ -176,7 +170,7 @@ pub fn comment(store: &Store, new: NewComment, now: &str) -> Result<Out, String>
         return Err(format!("{} has no version {version}", new.artifact));
     }
     let mut comments = store.comments(&new.artifact)?;
-    let made = comments.add(&new.artifact, version, new.anchor, new.body, new.author, new.to_agent, now).clone();
+    let made = comments.add(version, new.draft, &store.comment_ids()?, now).clone();
     store.save_comments(&new.artifact, &comments)?;
     Ok(Out {
         text: format!("{} on {} v{version}", made.id, new.artifact),
@@ -187,15 +181,10 @@ pub fn comment(store: &Store, new: NewComment, now: &str) -> Result<Out, String>
 pub fn change_comment(
     store: &Store,
     comment: &str,
-    artifact: Option<String>,
     change: impl FnOnce(&mut Comment) -> &'static str,
 ) -> Result<Out, String> {
     let _lock = store.lock()?;
-    let id = match artifact {
-        Some(id) => id,
-        None => store.owner_of(comment)?,
-    };
-    store.artifact(&id)?;
+    let id = store.owner_of(comment)?;
     let mut comments = store.comments(&id)?;
     let found = comments.get(comment).ok_or_else(|| format!("no comment {comment} on {id}"))?;
     let did = change(found);
@@ -204,7 +193,7 @@ pub fn change_comment(
     Ok(Out { text: format!("{did} {comment} on {id}"), json: json!({ "artifact": id, "comment": after }) })
 }
 
-pub fn set_status(store: &Store, id: &str, status: Status, now: &str) -> Result<Out, String> {
+pub fn set_status(store: &Store, id: &ArtifactId, status: Status, now: &str) -> Result<Out, String> {
     let _lock = store.lock()?;
     let mut artifact = store.artifact(id)?;
     artifact.status = status;
@@ -213,31 +202,32 @@ pub fn set_status(store: &Store, id: &str, status: Status, now: &str) -> Result<
     Ok(Out { text: format!("{id} is {}", name(status)), json: json!({ "id": id, "status": status }) })
 }
 
-/// Types a comment into the terminal that published its artifact, and marks the artifact as needing
-/// changes unless the agent is already working on it.
-pub fn deliver(store: &Store, comment: &str, artifact: Option<String>, now: &str) -> Result<Out, String> {
-    let id = match artifact {
-        Some(id) => id,
-        None => store.owner_of(comment)?,
-    };
-    let a = store.artifact(&id)?;
+pub fn send_and_request_changes(store: &Store, comment: &str, now: &str) -> Result<Out, String> {
+    let id = store.owner_of(comment)?;
+    let artifact = store.artifact(&id)?;
     let found = store
         .comments(&id)?
         .comments
         .into_iter()
         .find(|c| c.id == comment)
         .ok_or_else(|| format!("no comment {comment} on {id}"))?;
-    let terminal =
-        a.terminal.clone().ok_or_else(|| format!("{id} was not published from a terminal: nobody to send to"))?;
-    // Text typed into a terminal is run by whatever is there. Only an agent reports a status, so a
-    // terminal without one is a shell or some other program now, and gets nothing.
-    match agent::status(&terminal).as_deref() {
-        None => return Err(format!("{terminal} is not running: the comment is saved, not sent")),
-        Some("live") => return Err(format!("{terminal} is not running an agent now: the comment is saved, not sent")),
-        Some(_) => {}
+    let terminal = artifact
+        .first_publisher
+        .clone()
+        .ok_or_else(|| format!("{id} was not published from a terminal: nobody to send to"))?;
+    match agent::status(&terminal) {
+        TerminalState::Gone => return Err(format!("{terminal} is not running: the comment is saved, not sent")),
+        TerminalState::NoAgent => {
+            return Err(format!("{terminal} is not running an agent now: the comment is saved, not sent"));
+        }
+        TerminalState::Agent => {}
     }
-    agent::send(&terminal, &agent::message(&a, &found))?;
-    if a.status != Status::Working {
+    agent::type_and_submit(&terminal, &agent::message(&artifact, &found))?;
+    change_comment(store, comment, |c| {
+        c.sent_to_agent = true;
+        "sent"
+    })?;
+    if artifact.status != Status::Working {
         set_status(store, &id, Status::ChangesRequested, now)?;
     }
     Ok(Out {

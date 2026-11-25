@@ -1,18 +1,19 @@
-//! The store on disk: `<root>/<id>/artifact.json`, `comments.json` and `v<n>/<file>`.
-//! Every write replaces its file whole (temp file, then rename), so a reader never sees half of one.
-
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::thread::sleep;
 use std::time::{Duration, SystemTime};
 
-use crate::model::{Artifact, Comments, valid_id};
+use crate::model::{Artifact, ArtifactId, Comments};
+
+const STALE_LOCK_AGE: Duration = Duration::from_secs(10);
+const LOCK_ATTEMPTS: u32 = 100;
+const LOCK_RETRY_DELAY: Duration = Duration::from_millis(30);
 
 pub struct Store {
     root: PathBuf,
 }
 
-/// Held while a command reads, decides and writes. Removed on drop.
 pub struct Lock(PathBuf);
 
 impl Drop for Lock {
@@ -26,7 +27,6 @@ fn err(what: &str, path: &Path, e: impl std::fmt::Display) -> String {
 }
 
 impl Store {
-    /// `HERDR_ARTIFACTS_HOME`, else `~/.herdr/artifacts`.
     pub fn open() -> Result<Self, String> {
         let root = match std::env::var_os("HERDR_ARTIFACTS_HOME").filter(|v| !v.is_empty()) {
             Some(dir) => PathBuf::from(dir),
@@ -38,14 +38,13 @@ impl Store {
         Ok(Self { root })
     }
 
-    pub fn dir(&self, id: &str) -> Result<PathBuf, String> {
-        if valid_id(id) { Ok(self.root.join(id)) } else { Err(format!("not an artifact id: {id}")) }
+    fn dir(&self, id: &ArtifactId) -> PathBuf {
+        self.root.join(id.as_str())
     }
 
-    /// One writer at a time. A lock older than ten seconds was left by a killed command and is taken over.
     pub fn lock(&self) -> Result<Lock, String> {
         let path = self.root.join(".lock");
-        for _ in 0..100 {
+        for _ in 0..LOCK_ATTEMPTS {
             match fs::create_dir(&path) {
                 Ok(()) => return Ok(Lock(path)),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -53,10 +52,10 @@ impl Store {
                         .and_then(|m| m.modified())
                         .ok()
                         .and_then(|t| SystemTime::now().duration_since(t).ok());
-                    if age.is_some_and(|a| a > Duration::from_secs(10)) {
+                    if age.is_some_and(|a| a > STALE_LOCK_AGE) {
                         let _ = fs::remove_dir(&path);
                     } else {
-                        sleep(Duration::from_millis(30));
+                        sleep(LOCK_RETRY_DELAY);
                     }
                 }
                 Err(e) => return Err(err("cannot lock", &path, e)),
@@ -65,23 +64,22 @@ impl Store {
         Err(format!("the store is busy: {} is held", path.display()))
     }
 
-    /// Every artifact id, in name order.
-    pub fn ids(&self) -> Result<Vec<String>, String> {
-        let mut ids: Vec<String> = fs::read_dir(&self.root)
+    pub fn ids(&self) -> Result<Vec<ArtifactId>, String> {
+        let mut ids: Vec<ArtifactId> = fs::read_dir(&self.root)
             .map_err(|e| err("cannot read", &self.root, e))?
-            .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
-            .filter(|name| valid_id(name) && self.root.join(name).join("artifact.json").is_file())
+            .filter_map(|entry| entry.ok()?.file_name().into_string().ok()?.parse().ok())
+            .filter(|id| self.exists(id))
             .collect();
         ids.sort();
         Ok(ids)
     }
 
-    pub fn exists(&self, id: &str) -> Result<bool, String> {
-        Ok(self.dir(id)?.join("artifact.json").is_file())
+    pub fn exists(&self, id: &ArtifactId) -> bool {
+        self.dir(id).join("artifact.json").is_file()
     }
 
-    pub fn artifact(&self, id: &str) -> Result<Artifact, String> {
-        let path = self.dir(id)?.join("artifact.json");
+    pub fn artifact(&self, id: &ArtifactId) -> Result<Artifact, String> {
+        let path = self.dir(id).join("artifact.json");
         if !path.is_file() {
             return Err(format!("no artifact {id}"));
         }
@@ -89,9 +87,8 @@ impl Store {
         serde_json::from_str(&text).map_err(|e| err("cannot parse", &path, e))
     }
 
-    /// An artifact nobody commented on has no comments file.
-    pub fn comments(&self, id: &str) -> Result<Comments, String> {
-        let path = self.dir(id)?.join("comments.json");
+    pub fn comments(&self, id: &ArtifactId) -> Result<Comments, String> {
+        let path = self.dir(id).join("comments.json");
         if !path.is_file() {
             return Ok(Comments::default());
         }
@@ -99,39 +96,39 @@ impl Store {
         serde_json::from_str(&text).map_err(|e| err("cannot parse", &path, e))
     }
 
+    pub fn comment_ids(&self) -> Result<HashSet<String>, String> {
+        let mut ids = HashSet::new();
+        for id in self.ids()? {
+            ids.extend(self.comments(&id)?.comments.into_iter().map(|c| c.id));
+        }
+        Ok(ids)
+    }
+
     pub fn save_artifact(&self, artifact: &Artifact) -> Result<(), String> {
-        write_whole(&self.dir(&artifact.id)?.join("artifact.json"), &to_json(artifact))
+        write_whole(&self.dir(&artifact.id).join("artifact.json"), &to_json(artifact))
     }
 
-    pub fn save_comments(&self, id: &str, comments: &Comments) -> Result<(), String> {
-        write_whole(&self.dir(id)?.join("comments.json"), &to_json(comments))
+    pub fn save_comments(&self, id: &ArtifactId, comments: &Comments) -> Result<(), String> {
+        write_whole(&self.dir(id).join("comments.json"), &to_json(comments))
     }
 
-    /// Copies the published content into `v<n>/<file>` and returns where it is.
-    pub fn snapshot(&self, id: &str, n: u32, file: &str, content: &[u8]) -> Result<PathBuf, String> {
-        let path = self.version_path(id, n, file)?;
+    pub fn snapshot(&self, id: &ArtifactId, n: u32, file: &str, content: &[u8]) -> Result<PathBuf, String> {
+        let path = self.version_path(id, n, file);
         write_whole(&path, content)?;
         Ok(path)
     }
 
-    pub fn version_path(&self, id: &str, n: u32, file: &str) -> Result<PathBuf, String> {
-        Ok(self.dir(id)?.join(format!("v{n}")).join(file))
+    pub fn version_path(&self, id: &ArtifactId, n: u32, file: &str) -> PathBuf {
+        self.dir(id).join(format!("v{n}")).join(file)
     }
 
-    /// The artifact holding a comment. Comment ids are unique inside an artifact, so two artifacts
-    /// can share one: then the caller has to say which.
-    pub fn owner_of(&self, comment: &str) -> Result<String, String> {
-        let mut owners = Vec::new();
+    pub fn owner_of(&self, comment: &str) -> Result<ArtifactId, String> {
         for id in self.ids()? {
             if self.comments(&id)?.comments.iter().any(|c| c.id == comment) {
-                owners.push(id);
+                return Ok(id);
             }
         }
-        match owners.as_slice() {
-            [one] => Ok(one.clone()),
-            [] => Err(format!("no comment {comment}")),
-            many => Err(format!("comment {comment} is on several artifacts ({}): pass --artifact", many.join(", "))),
-        }
+        Err(format!("no comment {comment}"))
     }
 }
 

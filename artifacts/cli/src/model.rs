@@ -1,4 +1,6 @@
-//! The store's types and every decision about them. No IO here: `store.rs` reads and writes.
+use std::collections::HashSet;
+use std::fmt;
+use std::str::FromStr;
 
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
@@ -28,16 +30,35 @@ pub enum Kind {
     Other,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(try_from = "String")]
+pub struct ArtifactId(String);
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[serde(try_from = "f64")]
+pub struct Fraction(f64);
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Author {
+    Person,
+    Terminal { address: String },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Published {
+    New(u32),
+    Unchanged(u32),
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Artifact {
-    pub id: String,
+    pub id: ArtifactId,
     pub title: String,
-    /// The file it was published from, absolute, on the machine that holds this store.
     pub source: String,
     pub kind: Kind,
     pub status: Status,
-    /// The terminal that first published it (`HC_TERMINAL_ID`), when there was one.
-    pub terminal: Option<String>,
+    pub first_publisher: Option<String>,
     pub created: String,
     pub updated: String,
     pub versions: Vec<Version>,
@@ -47,12 +68,9 @@ pub struct Artifact {
 pub struct Version {
     pub n: u32,
     pub at: String,
-    /// The snapshot's file name inside `v<n>/`.
     pub file: String,
-    /// FNV-1a of the content: tells an unchanged publish from a new version.
     pub hash: String,
     pub note: Option<String>,
-    /// Comments this version says it resolves.
     #[serde(default)]
     pub resolves: Vec<String>,
 }
@@ -65,17 +83,14 @@ pub struct Comments {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Comment {
     pub id: String,
-    /// The version it was written on.
     pub version: u32,
     pub anchor: Option<Anchor>,
     pub body: String,
-    /// A terminal address for an agent, `user` for the person.
-    pub author: String,
-    /// Sent to the publishing agent, not only kept as a note.
-    pub to_agent: bool,
+    pub author: Author,
+    #[serde(default)]
+    pub sent_to_agent: bool,
     pub at: String,
     pub open: bool,
-    /// The version that resolved it, when a publish did.
     pub resolved_in: Option<u32>,
     #[serde(default)]
     pub replies: Vec<Reply>,
@@ -84,27 +99,111 @@ pub struct Comment {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Anchor {
-    /// A point on the rendered artifact, as fractions of its width and height.
-    Pin { x: f64, y: f64, label: Option<String> },
-    /// Quoted text, with the 1-based source line when known.
+    Pin { x: Fraction, y: Fraction, label: Option<String> },
     Text { quote: String, line: Option<u32> },
-    /// An element of a live page: how to find it again, what it said, and where in it the click was
-    /// (fractions of its width and height).
-    Element { selector: String, label: Option<String>, text: Option<String>, x: f64, y: f64 },
+    Element { selector: String, label: Option<String>, text: Option<String>, x: Fraction, y: Fraction },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Reply {
-    pub author: String,
+    pub author: Author,
     pub body: String,
     pub at: String,
+}
+
+pub struct Draft {
+    pub anchor: Option<Anchor>,
+    pub body: String,
+    pub author: Author,
+}
+
+impl ArtifactId {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl FromStr for ArtifactId {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, String> {
+        let folder_safe =
+            !text.is_empty() && text.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+        if folder_safe { Ok(Self(text.to_owned())) } else { Err(format!("not an artifact id: {text}")) }
+    }
+}
+
+impl TryFrom<String> for ArtifactId {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Self, String> {
+        text.parse()
+    }
+}
+
+impl fmt::Display for ArtifactId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Fraction {
+    pub fn get(self) -> f64 {
+        self.0
+    }
+}
+
+impl TryFrom<f64> for Fraction {
+    type Error = String;
+
+    fn try_from(value: f64) -> Result<Self, String> {
+        if (0.0..=1.0).contains(&value) {
+            Ok(Self(value))
+        } else {
+            Err(format!("{value} is not a fraction from 0 to 1"))
+        }
+    }
+}
+
+impl fmt::Display for Fraction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl FromStr for Author {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, String> {
+        match text {
+            "person" => Ok(Self::Person),
+            "" => Err("--author wants person or a terminal address".into()),
+            address => Ok(Self::Terminal { address: address.into() }),
+        }
+    }
+}
+
+impl fmt::Display for Author {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Person => f.write_str("the person"),
+            Self::Terminal { address } => f.write_str(address),
+        }
+    }
+}
+
+impl Published {
+    pub fn version(self) -> u32 {
+        match self {
+            Self::New(n) | Self::Unchanged(n) => n,
+        }
+    }
 }
 
 pub fn fnv1a(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3))
 }
 
-/// Lowercase letters, digits and single dashes; `artifact` when nothing is left.
 pub fn slug(text: &str) -> String {
     let mut out = String::new();
     for c in text.chars().flat_map(char::to_lowercase) {
@@ -118,14 +217,8 @@ pub fn slug(text: &str) -> String {
     if out.is_empty() { "artifact".into() } else { out.chars().take(40).collect() }
 }
 
-/// One artifact per source file: the same path always publishes to the same id.
-pub fn artifact_id(source: &str, stem: &str) -> String {
-    format!("{}-{:08x}", slug(stem).trim_end_matches('-'), fnv1a(source.as_bytes()) as u32)
-}
-
-/// Ids name folders, so nothing but a slug may be one.
-pub fn valid_id(id: &str) -> bool {
-    !id.is_empty() && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+pub fn artifact_id(source: &str, stem: &str) -> ArtifactId {
+    ArtifactId(format!("{}-{:08x}", slug(stem).trim_end_matches('-'), fnv1a(source.as_bytes()) as u32))
 }
 
 pub fn kind_of(file_name: &str) -> Kind {
@@ -142,16 +235,16 @@ pub fn kind_of(file_name: &str) -> Kind {
     }
 }
 
-/// `0.42,0.31`: fractions of the rendered width and height.
-pub fn parse_pin(text: &str) -> Result<(f64, f64), String> {
+pub fn parse_pin(text: &str) -> Result<(Fraction, Fraction), String> {
     let bad = || format!("--pin wants X,Y as fractions from 0 to 1 (got {text})");
+    let fraction =
+        |part: &str| part.trim().parse::<f64>().ok().and_then(|v| Fraction::try_from(v).ok()).ok_or_else(bad);
     let (x, y) = text.split_once(',').ok_or_else(bad)?;
-    let (x, y) = (x.trim().parse::<f64>().map_err(|_| bad())?, y.trim().parse::<f64>().map_err(|_| bad())?);
-    if (0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y) { Ok((x, y)) } else { Err(bad()) }
+    Ok((fraction(x)?, fraction(y)?))
 }
 
 impl Artifact {
-    pub fn new(id: String, title: String, source: String, terminal: Option<String>, now: &str) -> Self {
+    pub fn new(id: ArtifactId, title: String, source: String, first_publisher: Option<String>, now: &str) -> Self {
         let kind = kind_of(&source);
         Self {
             id,
@@ -159,7 +252,7 @@ impl Artifact {
             source,
             kind,
             status: Status::Working,
-            terminal,
+            first_publisher,
             created: now.into(),
             updated: now.into(),
             versions: Vec::new(),
@@ -170,8 +263,6 @@ impl Artifact {
         self.versions.last().map_or(0, |v| v.n)
     }
 
-    /// Records a publish and returns its version and whether that version is new. Content equal to the
-    /// latest version makes no new one: its note and resolved comments are added to the latest.
     pub fn publish(
         &mut self,
         file: &str,
@@ -179,7 +270,7 @@ impl Artifact {
         note: Option<String>,
         resolves: &[String],
         now: &str,
-    ) -> (u32, bool) {
+    ) -> Published {
         self.updated = now.into();
         let is_new = self.versions.last().is_none_or(|v| v.hash != hash);
         if is_new {
@@ -202,7 +293,7 @@ impl Artifact {
                 version.resolves.push(id.clone());
             }
         }
-        (version.n, is_new)
+        if is_new { Published::New(version.n) } else { Published::Unchanged(version.n) }
     }
 }
 
@@ -215,22 +306,11 @@ impl Comments {
         self.comments.iter().filter(|c| c.open).count()
     }
 
-    /// Adds a comment under an id no other comment of this artifact has.
-    #[allow(clippy::too_many_arguments)]
-    pub fn add(
-        &mut self,
-        artifact: &str,
-        version: u32,
-        anchor: Option<Anchor>,
-        body: String,
-        author: String,
-        to_agent: bool,
-        now: &str,
-    ) -> &Comment {
-        let mut seed = fnv1a(format!("{artifact}\n{now}\n{body}\n{}", self.comments.len()).as_bytes());
+    pub fn add(&mut self, version: u32, draft: Draft, taken: &HashSet<String>, now: &str) -> &Comment {
+        let mut seed = fnv1a(draft.body.as_bytes());
         let id = loop {
             let id = format!("c_{:06x}", seed & 0xff_ffff);
-            if !self.comments.iter().any(|c| c.id == id) {
+            if !taken.contains(&id) && !self.comments.iter().any(|c| c.id == id) {
                 break id;
             }
             seed = seed.wrapping_add(1);
@@ -238,10 +318,10 @@ impl Comments {
         self.comments.push(Comment {
             id,
             version,
-            anchor,
-            body,
-            author,
-            to_agent,
+            anchor: draft.anchor,
+            body: draft.body,
+            author: draft.author,
+            sent_to_agent: false,
             at: now.into(),
             open: true,
             resolved_in: None,
@@ -252,7 +332,7 @@ impl Comments {
 }
 
 impl Comment {
-    pub fn reply(&mut self, author: String, body: String, now: &str) {
+    pub fn reply(&mut self, author: Author, body: String, now: &str) {
         self.replies.push(Reply { author, body, at: now.into() });
     }
 
@@ -271,22 +351,33 @@ impl Comment {
 mod tests {
     use super::*;
 
+    fn draft(body: &str) -> Draft {
+        Draft { anchor: None, body: body.into(), author: Author::Person }
+    }
+
     #[test]
     fn the_same_source_always_gets_the_same_id_and_ids_are_folder_safe() {
         let id = artifact_id("/site/Pricing Page.html", "Pricing Page");
         assert_eq!(id, artifact_id("/site/Pricing Page.html", "Pricing Page"));
-        assert!(id.starts_with("pricing-page-") && valid_id(&id));
+        assert!(id.as_str().starts_with("pricing-page-") && id.as_str().parse::<ArtifactId>().is_ok());
         assert_ne!(id, artifact_id("/other/Pricing Page.html", "Pricing Page"));
-        assert!(valid_id(&artifact_id("/x/日本語.md", "日本語")));
-        assert!(!valid_id("../etc") && !valid_id("") && !valid_id("A"));
+        assert!(artifact_id("/x/日本語.md", "日本語").as_str().parse::<ArtifactId>().is_ok());
+    }
+
+    #[test]
+    fn an_invalid_artifact_id_is_refused() {
+        for bad in ["../etc", "", "A", "a/b", "a.b"] {
+            assert!(bad.parse::<ArtifactId>().is_err(), "{bad:?}");
+            assert!(serde_json::from_value::<ArtifactId>(serde_json::json!(bad)).is_err(), "{bad:?}");
+        }
     }
 
     #[test]
     fn unchanged_content_adds_no_version_but_keeps_its_note_and_resolves() {
-        let mut a = Artifact::new("a-1".into(), "A".into(), "/a.md".into(), None, "t0");
-        assert_eq!(a.publish("a.md", "h1", None, &[], "t1"), (1, true));
-        assert_eq!(a.publish("a.md", "h1", Some("same".into()), &["c_1".into()], "t2"), (1, false));
-        assert_eq!(a.publish("a.md", "h2", None, &["c_2".into()], "t3"), (2, true));
+        let mut a = Artifact::new("a-1".parse().unwrap(), "A".into(), "/a.md".into(), None, "t0");
+        assert_eq!(a.publish("a.md", "h1", None, &[], "t1"), Published::New(1));
+        assert_eq!(a.publish("a.md", "h1", Some("same".into()), &["c_1".into()], "t2"), Published::Unchanged(1));
+        assert_eq!(a.publish("a.md", "h2", None, &["c_2".into()], "t3"), Published::New(2));
         assert_eq!(a.versions[0].note.as_deref(), Some("same"));
         assert_eq!(a.versions[0].resolves, ["c_1"]);
         assert_eq!((a.versions[1].resolves.as_slice(), a.updated.as_str()), (["c_2".to_string()].as_slice(), "t3"));
@@ -295,8 +386,8 @@ mod tests {
     #[test]
     fn comments_get_distinct_ids_and_resolve_and_reopen() {
         let mut c = Comments::default();
-        let first = c.add("a-1", 1, None, "same".into(), "user".into(), true, "t").id.clone();
-        let second = c.add("a-1", 1, None, "same".into(), "user".into(), true, "t").id.clone();
+        let first = c.add(1, draft("same"), &HashSet::new(), "t").id.clone();
+        let second = c.add(1, draft("same"), &HashSet::new(), "t").id.clone();
         assert_ne!(first, second);
         c.get(&first).unwrap().resolve(Some(2));
         assert_eq!((c.open(), c.get(&first).unwrap().resolved_in), (1, Some(2)));
@@ -305,12 +396,26 @@ mod tests {
     }
 
     #[test]
-    fn kinds_come_from_the_extension_and_pins_must_be_fractions() {
+    fn kinds_come_from_the_extension() {
         assert_eq!(
             (kind_of("a.HTML"), kind_of("a.md"), kind_of("a.png"), kind_of("a")),
             (Kind::Html, Kind::Markdown, Kind::Image, Kind::Other)
         );
-        assert_eq!(parse_pin("0.5, 0.25"), Ok((0.5, 0.25)));
-        assert!(parse_pin("742,404").is_err() && parse_pin("0.5").is_err());
+    }
+
+    #[test]
+    fn a_fraction_outside_0_to_1_is_refused() {
+        assert_eq!(parse_pin("0.5, 0.25").map(|(x, y)| (x.get(), y.get())), Ok((0.5, 0.25)));
+        assert!(parse_pin("742,404").is_err() && parse_pin("0.5,-0.1").is_err() && parse_pin("0.5").is_err());
+        assert!(Fraction::try_from(1.5).is_err() && Fraction::try_from(f64::NAN).is_err());
+        let stored = serde_json::json!({ "kind": "pin", "x": 2.0, "y": 0.5, "label": null });
+        assert!(serde_json::from_value::<Anchor>(stored).is_err());
+    }
+
+    #[test]
+    fn an_author_flag_is_the_person_or_a_terminal_address() {
+        assert_eq!("person".parse(), Ok(Author::Person));
+        assert_eq!("t7".parse(), Ok(Author::Terminal { address: "t7".into() }));
+        assert!("".parse::<Author>().is_err());
     }
 }

@@ -1,23 +1,42 @@
-//! UTC timestamps without a date crate.
-
 use std::time::{SystemTime, UNIX_EPOCH};
+
+const SECONDS_PER_MINUTE: u64 = 60;
+const SECONDS_PER_HOUR: u64 = 3_600;
+const SECONDS_PER_DAY: u64 = 86_400;
+const DAYS_FROM_0000_03_01_TO_1970_01_01: i64 = 719_468;
+const YEARS_PER_ERA: i64 = 400;
+const DAYS_PER_ERA: i64 = 146_097;
+const DAYS_PER_100_YEARS: i64 = 36_524;
+const DAYS_PER_4_YEARS: i64 = 1_461;
+const DAYS_PER_YEAR: i64 = 365;
+const DAYS_PER_5_MONTHS_FROM_MARCH: i64 = 153;
+const MONTHS_PER_YEAR: i64 = 12;
+const MARCH: i64 = 3;
 
 pub fn now() -> String {
     rfc3339(SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs()))
 }
 
-/// Seconds since the epoch as `2026-11-23T06:30:00Z` (Howard Hinnant's civil-from-days).
 pub fn rfc3339(secs: u64) -> String {
-    let (days, rem) = ((secs / 86_400) as i64, secs % 86_400);
-    let z = days + 719_468;
-    let (era, doe) = (z.div_euclid(146_097), z.rem_euclid(146_097));
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z", rem / 3_600, rem % 3_600 / 60, rem % 60)
+    let (year, month, day) = civil_from_days((secs / SECONDS_PER_DAY) as i64);
+    let of_day = secs % SECONDS_PER_DAY;
+    let (hour, minute, second) =
+        (of_day / SECONDS_PER_HOUR, of_day % SECONDS_PER_HOUR / SECONDS_PER_MINUTE, of_day % SECONDS_PER_MINUTE);
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+fn civil_from_days(days_since_epoch: i64) -> (i64, i64, i64) {
+    let days = days_since_epoch + DAYS_FROM_0000_03_01_TO_1970_01_01;
+    let (era, day_of_era) = (days.div_euclid(DAYS_PER_ERA), days.rem_euclid(DAYS_PER_ERA));
+    let year_of_era = (day_of_era - day_of_era / (DAYS_PER_4_YEARS - 1) + day_of_era / DAYS_PER_100_YEARS
+        - day_of_era / (DAYS_PER_ERA - 1))
+        / DAYS_PER_YEAR;
+    let day_of_year = day_of_era - (DAYS_PER_YEAR * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let months_since_march = (5 * day_of_year + 2) / DAYS_PER_5_MONTHS_FROM_MARCH;
+    let day = day_of_year - (DAYS_PER_5_MONTHS_FROM_MARCH * months_since_march + 2) / 5 + 1;
+    let month = (months_since_march + MARCH - 1) % MONTHS_PER_YEAR + 1;
+    let year = era * YEARS_PER_ERA + year_of_era + i64::from(month < MARCH);
+    (year, month, day)
 }
 
 #[cfg(test)]

@@ -23,7 +23,7 @@ Rust 1.86 or newer.
 herdr-artifact publish site/pricing.html --title "Pricing page" -m "First draft"
 herdr-artifact list
 herdr-artifact show <artifact-id>
-herdr-artifact comment <artifact-id> "Name the free plan limit" --pin 0.5,0.25 --to-agent
+herdr-artifact comment <artifact-id> "Name the free plan limit" --pin 0.5,0.25
 herdr-artifact send <comment-id>
 herdr-artifact reply <comment-id> "Changed the subheading."
 herdr-artifact publish site/pricing.html -m "Named the limit" --resolves <comment-id>
@@ -39,9 +39,9 @@ Everything is under `~/.herdr/artifacts` (`HERDR_ARTIFACTS_HOME` moves it):
 
 | Path | Holds |
 |---|---|
-| `<id>/artifact.json` | title, source path, kind, status, the publishing terminal, and the list of versions |
+| `<id>/artifact.json` | title, source path, kind, status, the terminal that first published it (`first_publisher`), and the list of versions |
 | `<id>/v<n>/<file>` | the file as it was when version `n` was published |
-| `<id>/comments.json` | comment threads: anchor, body, author, replies, open or resolved, and the version that resolved it |
+| `<id>/comments.json` | comment threads: anchor, body, author (`person` or a terminal), whether `send` delivered it (`sent_to_agent`), replies, open or resolved, and the version that resolved it |
 
 The id comes from the source path, so publishing the same file again adds a version to the same
 artifact. Unchanged content adds none. Every write replaces its file whole, so a reader never sees

@@ -44,7 +44,7 @@ that needed no new version.
 herdr-artifact list [--status ready]
 herdr-artifact show <id>
 herdr-artifact publish <file> [--title T] [-m NOTE] [--resolves COMMENT]... [--status working|ready]
-herdr-artifact comment <id> <body> [--pin X,Y --label L | --quote Q --line N] [--to-agent]
+herdr-artifact comment <id> <body> [--pin X,Y --label L | --quote Q --line N]
 herdr-artifact reply <comment> <body> [--resolve]
 herdr-artifact resolve <comment> | reopen <comment>
 herdr-artifact status <id> working|ready|changes_requested|approved

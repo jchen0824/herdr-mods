@@ -1,6 +1,3 @@
-//! herdr-artifact: publish files as Herdr artifacts with versions, statuses and comment threads.
-//! One call per command; `--json` prints what the command made.
-
 mod agent;
 mod model;
 mod ops;
@@ -13,7 +10,7 @@ use std::process::ExitCode;
 use clap::{CommandFactory, Parser, Subcommand};
 use serde_json::json;
 
-use model::{Anchor, Status, parse_pin};
+use model::{Anchor, Author, Draft, Status, parse_pin};
 use ops::{NewComment, Out, default_author};
 use store::Store;
 
@@ -78,10 +75,7 @@ enum Command {
         /// The quote's 1-based line in the file.
         #[arg(long, requires = "quote")]
         line: Option<u32>,
-        /// Sent to the publishing agent, not only kept as a note.
-        #[arg(long)]
-        to_agent: bool,
-        /// Who wrote it (default: this terminal's address, else user).
+        /// Who wrote it: person or a terminal address (default: this terminal's address, else person).
         #[arg(long)]
         author: Option<String>,
     },
@@ -94,22 +88,11 @@ enum Command {
         resolve: bool,
         #[arg(long)]
         author: Option<String>,
-        /// The artifact, when two artifacts have a comment with this id.
-        #[arg(long)]
-        artifact: Option<String>,
     },
     /// Close a comment.
-    Resolve {
-        comment: String,
-        #[arg(long)]
-        artifact: Option<String>,
-    },
+    Resolve { comment: String },
     /// Open a closed comment again.
-    Reopen {
-        comment: String,
-        #[arg(long)]
-        artifact: Option<String>,
-    },
+    Reopen { comment: String },
     /// Set an artifact's status.
     Status {
         id: String,
@@ -117,11 +100,7 @@ enum Command {
         status: Status,
     },
     /// Type a comment into the terminal of the agent that published its artifact.
-    Send {
-        comment: String,
-        #[arg(long)]
-        artifact: Option<String>,
-    },
+    Send { comment: String },
 }
 
 fn main() -> ExitCode {
@@ -157,8 +136,8 @@ fn run(command: Command) -> Result<Out, String> {
             ops::publish(&store, &file, title, note, &resolves, status, &now)
         }
         Command::List { status } => ops::list(&store, status),
-        Command::Show { id } => ops::show(&store, &id),
-        Command::Comment { id, body, version, pin, label, quote, line, to_agent, author } => {
+        Command::Show { id } => ops::show(&store, &id.parse()?),
+        Command::Comment { id, body, version, pin, label, quote, line, author } => {
             let anchor = match (pin, quote) {
                 (Some(pin), _) => {
                     let (x, y) = parse_pin(&pin)?;
@@ -167,12 +146,12 @@ fn run(command: Command) -> Result<Out, String> {
                 (None, Some(quote)) => Some(Anchor::Text { quote, line }),
                 (None, None) => None,
             };
-            let author = author.unwrap_or_else(default_author);
-            ops::comment(&store, NewComment { artifact: id, body, version, anchor, to_agent, author }, &now)
+            let draft = Draft { anchor, body, author: author_or_default(author)? };
+            ops::comment(&store, NewComment { artifact: id.parse()?, version, draft }, &now)
         }
-        Command::Reply { comment, body, resolve, author, artifact } => {
-            let author = author.unwrap_or_else(default_author);
-            ops::change_comment(&store, &comment, artifact, |c| {
+        Command::Reply { comment, body, resolve, author } => {
+            let author = author_or_default(author)?;
+            ops::change_comment(&store, &comment, |c| {
                 c.reply(author, body, &now);
                 if resolve {
                     c.resolve(None);
@@ -180,15 +159,19 @@ fn run(command: Command) -> Result<Out, String> {
                 if resolve { "replied and resolved" } else { "replied" }
             })
         }
-        Command::Resolve { comment, artifact } => ops::change_comment(&store, &comment, artifact, |c| {
+        Command::Resolve { comment } => ops::change_comment(&store, &comment, |c| {
             c.resolve(None);
             "resolved"
         }),
-        Command::Reopen { comment, artifact } => ops::change_comment(&store, &comment, artifact, |c| {
+        Command::Reopen { comment } => ops::change_comment(&store, &comment, |c| {
             c.reopen();
             "reopened"
         }),
-        Command::Status { id, status } => ops::set_status(&store, &id, status, &now),
-        Command::Send { comment, artifact } => ops::deliver(&store, &comment, artifact, &now),
+        Command::Status { id, status } => ops::set_status(&store, &id.parse()?, status, &now),
+        Command::Send { comment } => ops::send_and_request_changes(&store, &comment, &now),
     }
+}
+
+fn author_or_default(flag: Option<String>) -> Result<Author, String> {
+    flag.map_or_else(|| Ok(default_author()), |author| author.parse())
 }
