@@ -221,6 +221,14 @@ pub fn artifact_id(source: &str, stem: &str) -> ArtifactId {
     ArtifactId(format!("{}-{:08x}", slug(stem).trim_end_matches('-'), fnv1a(source.as_bytes()) as u32))
 }
 
+pub fn artifact_id_for(source: &str, stem: &str, source_of: impl Fn(&ArtifactId) -> Option<String>) -> ArtifactId {
+    let first = artifact_id(source, stem);
+    (1u32..)
+        .map(|attempt| if attempt == 1 { first.clone() } else { ArtifactId(format!("{first}-{attempt}")) })
+        .find(|candidate| source_of(candidate).is_none_or(|taken_by| taken_by == source))
+        .expect("an unused id exists")
+}
+
 pub fn kind_of(file_name: &str) -> Kind {
     let ext = file_name.rsplit_once('.').map_or("", |(_, e)| e).to_ascii_lowercase();
     match ext.as_str() {
@@ -370,6 +378,27 @@ mod tests {
             assert!(bad.parse::<ArtifactId>().is_err(), "{bad:?}");
             assert!(serde_json::from_value::<ArtifactId>(serde_json::json!(bad)).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn two_sources_whose_ids_collide_get_different_artifacts() {
+        let (one, two) = ("/tmp/project-6fd8d800d150/index.html", "/tmp/project-2d7370373d7a/index.html");
+        assert_eq!(artifact_id(one, "index"), artifact_id(two, "index"));
+        let first = artifact_id_for(one, "index", |_| None);
+        let held = |id: &ArtifactId| (*id == first).then(|| one.to_owned());
+        let second = artifact_id_for(two, "index", held);
+        assert_eq!(second.to_string(), format!("{first}-2"));
+        assert_eq!(artifact_id_for(one, "index", held), first);
+        let both = |id: &ArtifactId| {
+            if *id == first {
+                Some(one.to_owned())
+            } else if *id == second {
+                Some(two.to_owned())
+            } else {
+                None
+            }
+        };
+        assert_eq!(artifact_id_for(two, "index", both), second);
     }
 
     #[test]

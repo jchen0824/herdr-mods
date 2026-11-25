@@ -15,7 +15,7 @@ just check                 # fmt, clippy and the suite, as CI runs them
 just install               # builds a release binary into ~/.local/bin
 ```
 
-Rust 1.86 or newer.
+Rust 1.89 or newer.
 
 ## Use
 

@@ -1,25 +1,15 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::thread::sleep;
-use std::time::{Duration, SystemTime};
 
 use crate::model::{Artifact, ArtifactId, Comments};
-
-const STALE_LOCK_AGE: Duration = Duration::from_secs(10);
-const LOCK_ATTEMPTS: u32 = 100;
-const LOCK_RETRY_DELAY: Duration = Duration::from_millis(30);
 
 pub struct Store {
     root: PathBuf,
 }
 
-pub struct Lock(PathBuf);
-
-impl Drop for Lock {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir(&self.0);
-    }
+pub struct Lock {
+    _held: fs::File,
 }
 
 fn err(what: &str, path: &Path, e: impl std::fmt::Display) -> String {
@@ -44,24 +34,14 @@ impl Store {
 
     pub fn lock(&self) -> Result<Lock, String> {
         let path = self.root.join(".lock");
-        for _ in 0..LOCK_ATTEMPTS {
-            match fs::create_dir(&path) {
-                Ok(()) => return Ok(Lock(path)),
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    let age = fs::metadata(&path)
-                        .and_then(|m| m.modified())
-                        .ok()
-                        .and_then(|t| SystemTime::now().duration_since(t).ok());
-                    if age.is_some_and(|a| a > STALE_LOCK_AGE) {
-                        let _ = fs::remove_dir(&path);
-                    } else {
-                        sleep(LOCK_RETRY_DELAY);
-                    }
-                }
-                Err(e) => return Err(err("cannot lock", &path, e)),
-            }
-        }
-        Err(format!("the store is busy: {} is held", path.display()))
+        let file = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .map_err(|e| err("cannot lock", &path, e))?;
+        file.lock().map_err(|e| err("cannot lock", &path, e))?;
+        Ok(Lock { _held: file })
     }
 
     pub fn ids(&self) -> Result<Vec<ArtifactId>, String> {

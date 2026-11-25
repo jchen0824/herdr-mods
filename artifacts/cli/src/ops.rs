@@ -3,7 +3,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::agent::{self, TerminalState};
-use crate::model::{Anchor, Artifact, ArtifactId, Author, Comment, Draft, Published, Status, artifact_id, fnv1a};
+use crate::model::{Anchor, Artifact, ArtifactId, Author, Comment, Draft, Published, Status, artifact_id_for, fnv1a};
 use crate::store::Store;
 
 pub struct Out {
@@ -43,9 +43,8 @@ pub fn publish(
     let file_name = source.file_name().and_then(|n| n.to_str()).ok_or("the file name is not valid UTF-8")?.to_owned();
     let stem = source.file_stem().and_then(|n| n.to_str()).unwrap_or(&file_name);
     let source_text = source.to_str().ok_or("the file path is not valid UTF-8")?;
-    let id = artifact_id(source_text, stem);
-
     let _lock = store.lock()?;
+    let id = artifact_id_for(source_text, stem, |id| store.artifact(id).ok().map(|a| a.source));
     let mut artifact = if store.exists(&id) {
         store.artifact(&id)?
     } else {
@@ -202,6 +201,20 @@ pub fn set_status(store: &Store, id: &ArtifactId, status: Status, now: &str) -> 
     Ok(Out { text: format!("{id} is {}", name(status)), json: json!({ "id": id, "status": status }) })
 }
 
+fn record_delivery(store: &Store, id: &ArtifactId, comment: &str, now: &str) -> Result<(), String> {
+    let _lock = store.lock()?;
+    let mut comments = store.comments(id)?;
+    comments.get(comment).ok_or_else(|| format!("no comment {comment} on {id}"))?.sent_to_agent = true;
+    store.save_comments(id, &comments)?;
+    let mut artifact = store.artifact(id)?;
+    if artifact.status != Status::Working {
+        artifact.status = Status::ChangesRequested;
+        artifact.updated = now.into();
+        store.save_artifact(&artifact)?;
+    }
+    Ok(())
+}
+
 pub fn send_and_request_changes(store: &Store, comment: &str, now: &str) -> Result<Out, String> {
     let id = store.owner_of(comment)?;
     let artifact = store.artifact(&id)?;
@@ -223,13 +236,7 @@ pub fn send_and_request_changes(store: &Store, comment: &str, now: &str) -> Resu
         TerminalState::Agent => {}
     }
     agent::type_and_submit(&terminal, &agent::message(&artifact, &found))?;
-    change_comment(store, comment, |c| {
-        c.sent_to_agent = true;
-        "sent"
-    })?;
-    if artifact.status != Status::Working {
-        set_status(store, &id, Status::ChangesRequested, now)?;
-    }
+    record_delivery(store, &id, comment, now)?;
     Ok(Out {
         text: format!("sent {comment} to {terminal}"),
         json: json!({ "artifact": id, "comment": comment, "terminal": terminal }),
