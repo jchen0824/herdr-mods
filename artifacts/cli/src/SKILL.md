@@ -18,6 +18,23 @@ A new version is `ready` for review. Pass `--status working` while you are still
 
 Only that one file is snapshotted. An HTML page shows best when its CSS and images are inline.
 
+## A page on a dev server
+
+When what you made is a running app, publish its address instead of a file:
+
+```sh
+herdr-artifact publish --url http://localhost:5173/pricing --title "Pricing page"
+```
+
+Nothing is copied. The person reviews the live page through a local proxy, and hot reload keeps
+working, so your edits show up as you save. Only plain `http://` dev servers on this computer.
+Publish the same address again, with `-m` and `--resolves`, to say a round of changes is done.
+Each publish of an address is a new version.
+
+The person can review several artifacts side by side at
+`http://127.0.0.1:7501/review/<id>,<id>`, for example three alternatives of one page. Publish
+each alternative as its own file or address.
+
 ## Answer comments
 
 Comments reach your terminal with their id (`c_8f2a1b`). Read them all with:
@@ -38,17 +55,25 @@ herdr-artifact reply c_8f2a1b "Added a toggle above the cards. Yearly is the def
 have a question or disagree; the person sees it in the thread. `reply --resolve` closes a comment
 that needed no new version.
 
+## Element comments
+
+The person reviews an HTML artifact or a live page in their browser and can comment on one
+element. Such a comment names it: `Pinned on the element a.btn "Book a demo", 50% across and 50%
+down it (selector: body > div > a)`. The pin is the point the person clicked; the element is what
+was under it. The selector is how the page found it; the label and text are how you recognize it.
+
 ## Everything
 
 ```sh
 herdr-artifact list [--status ready]
 herdr-artifact show <id>
-herdr-artifact publish <file> [--title T] [-m NOTE] [--resolves COMMENT]... [--status working|ready]
+herdr-artifact publish <file> | --url <http://...> [--title T] [-m NOTE] [--resolves COMMENT]... [--status working|ready]
 herdr-artifact comment <id> <body> [--pin X,Y --label L | --quote Q --line N]
 herdr-artifact reply <comment> <body> [--resolve]
 herdr-artifact resolve <comment> | reopen <comment>
 herdr-artifact status <id> working|ready|changes_requested|approved
 herdr-artifact send <comment>            # type a comment into the publishing agent's terminal
+herdr-artifact serve [--port 7501]       # review pages for the person's browser, this computer only
 ```
 
 `--json` on any command prints its result as JSON, or `{"error": "..."}` with exit code 1.

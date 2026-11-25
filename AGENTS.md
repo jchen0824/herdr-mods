@@ -40,6 +40,7 @@ make hooks                      # use .githooks: reject non-conventional commit 
 node scripts/check-commits.mjs --message 'fix(kube): retry loading clusters'
 herdr-app check ~/.config/herdr-app/mods/<name>   # Herdr's own check, on an installed copy
 cd artifacts/cli && cargo test  # herdr-artifact; `just check` adds fmt and clippy, `just install` installs it
+cd artifacts/cli/e2e && npm ci && npx playwright install chromium && npm test  # the review page in Chromium
 ```
 
 ## Skills
@@ -75,13 +76,17 @@ cd artifacts/cli && cargo test  # herdr-artifact; `just check` adds fmt and clip
   server's objects or an error, no secret value survives redaction, the YAML view reads back
   as the same object. A failure prints the smallest failing input and a seed to replay it.
 - `artifacts/cli/`: `herdr-artifact`, a Rust command-line program (not a mod, and not a gallery
-  entry yet). An agent publishes a file as an artifact with versions, a status and comment threads,
-  kept in `~/.herdr/artifacts`; `send` types a comment into the publishing agent's terminal through
-  `hc`, and only when that terminal reports an agent status. It follows herdr-core's conventions
-  (edition 2024, `rustfmt.toml` width 120, clippy warnings denied, deciding code in `model.rs` apart
-  from IO in `store.rs`). Its tests run the real binary against a scratch store under `/var/tmp`.
-  CI's `artifact-cli` job runs `cargo fmt --check`, `cargo clippy` and `cargo test` there;
-  `make check` does not.
+  entry yet). An agent publishes a file, or a dev server's page with `publish --url`, as an artifact
+  with versions, a status and comment threads, kept in `~/.herdr/artifacts`; `send` types a comment
+  into the publishing agent's terminal through `hc`, and only when that terminal reports an agent
+  status. `serve` is the review page in the browser (`server.rs`, `proxy.rs`, `http.rs`, `src/web/`),
+  std only: the page and its API on one origin, artifacts on another, a proxy per dev server, on
+  `127.0.0.1` and `--host` names only. It follows herdr-core's conventions (edition 2024,
+  `rustfmt.toml` width 120, clippy warnings denied, deciding code in `model.rs` apart from IO in
+  `store.rs`). Its tests run the real binary against a scratch store under `/var/tmp`, with a
+  stand-in `hc`. CI's `artifact-cli` job runs `cargo fmt --check`, `cargo clippy` and `cargo test`
+  there; `artifact-review-e2e` runs `artifacts/cli/e2e` (Playwright, its own `package.json`) in
+  Chromium. `make check` runs neither.
 - `scripts/check-mods.mjs` checks each folder is a complete entry, every `.js` parses,
   `??` is never mixed with `||`/`&&` without parentheses (QuickJS rejects it), and
   Herdr's generated `jsconfig.json`/`*.d.ts` are not committed.

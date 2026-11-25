@@ -1,11 +1,15 @@
 use std::process::Command;
 
-use crate::model::{Anchor, Artifact, Comment};
+use serde::Serialize;
 
+use crate::model::{Anchor, Artifact, Comment, Kind};
+
+#[derive(Serialize, Debug, PartialEq, Eq)]
+#[serde(tag = "state", content = "status", rename_all = "snake_case")]
 pub enum TerminalState {
     Gone,
     NoAgent,
-    Agent,
+    Agent(String),
 }
 
 fn hc() -> Command {
@@ -37,7 +41,7 @@ pub fn message(a: &Artifact, c: &Comment) -> String {
         lines.push(format!("  {}: \"{}\"", r.author, r.body));
     }
     lines.push(format!("Source: {}", a.source));
-    let publish = format!("\"{}\"", a.source);
+    let publish = if a.kind == Kind::Url { format!("--url \"{}\"", a.source) } else { format!("\"{}\"", a.source) };
     lines.push(format!(
         "Reply: herdr-artifact reply {} \"...\" | After fixing: herdr-artifact publish {publish} -m \"what changed\" --resolves {} | Manual: herdr-artifact --skill",
         c.id, c.id
@@ -66,8 +70,7 @@ pub fn status(terminal: &str) -> TerminalState {
     let found = listed.as_ref().and_then(|l| l["terminals"].as_array()?.iter().find(|t| t["address"] == terminal));
     match found {
         None => TerminalState::Gone,
-        Some(t) if t["status"].is_string() => TerminalState::Agent,
-        Some(_) => TerminalState::NoAgent,
+        Some(t) => t["status"].as_str().map_or(TerminalState::NoAgent, |s| TerminalState::Agent(s.to_owned())),
     }
 }
 
@@ -75,7 +78,7 @@ pub fn status(terminal: &str) -> TerminalState {
 mod tests {
     use std::collections::HashSet;
 
-    use super::message;
+    use super::{TerminalState, message};
     use crate::model::{Anchor, Artifact, Author, Comments, Draft, Fraction};
 
     #[test]
@@ -99,5 +102,22 @@ mod tests {
         );
         assert!(text.contains("\"Open the calendar\"") && text.contains(&format!("reply {}", comment.id)));
         assert!(text.contains(&format!("publish \"/site/p.html\" -m \"what changed\" --resolves {}", comment.id)));
+    }
+
+    #[test]
+    fn a_live_page_is_published_again_by_its_url() {
+        let a = Artifact::live("p-1".parse().unwrap(), "http://localhost:5173/p".into(), Some("t7".into()), "t");
+        let draft = Draft { anchor: None, body: "Bigger".into(), author: Author::Person };
+        let comment = Comments::default().add(1, draft, &HashSet::new(), "t").clone();
+        assert!(message(&a, &comment).contains("publish --url \"http://localhost:5173/p\" -m"));
+    }
+
+    #[test]
+    fn the_terminal_state_says_whether_an_agent_is_there_and_what_it_is_doing() {
+        assert_eq!(
+            serde_json::to_value(TerminalState::Agent("working".into())).unwrap(),
+            serde_json::json!({ "state": "agent", "status": "working" })
+        );
+        assert_eq!(serde_json::to_value(TerminalState::NoAgent).unwrap(), serde_json::json!({ "state": "no_agent" }));
     }
 }

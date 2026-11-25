@@ -1,6 +1,9 @@
 mod agent;
+mod http;
 mod model;
 mod ops;
+mod proxy;
+mod server;
 mod store;
 mod time;
 
@@ -35,7 +38,11 @@ struct Cli {
 enum Command {
     /// Publish a file: the first time makes an artifact, later times make versions.
     Publish {
-        file: PathBuf,
+        #[arg(required_unless_present = "url", conflicts_with = "url")]
+        file: Option<PathBuf>,
+        /// A live page on a dev server (http://localhost:5173/pricing), reviewed through a proxy. Nothing is copied.
+        #[arg(long)]
+        url: Option<String>,
         /// The artifact's name (default: the file name). Renames an existing artifact.
         #[arg(long)]
         title: Option<String>,
@@ -101,6 +108,16 @@ enum Command {
     },
     /// Type a comment into the terminal of the agent that published its artifact.
     Send { comment: String },
+    /// Serve review pages for this computer's browser: the artifact rendered, with comments on it.
+    Serve {
+        /// 0 picks a free port.
+        #[arg(long, default_value_t = server::DEFAULT_PORT)]
+        port: u16,
+        /// Also answer on this name of this computer (its tailnet name, say), for reviewing from another
+        /// device on a private network. Anyone who can reach it can send comments to your agents.
+        #[arg(long, value_name = "NAME")]
+        host: Vec<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -113,7 +130,7 @@ fn main() -> ExitCode {
         let _ = Cli::command().print_help();
         return ExitCode::from(2);
     };
-    match run(command) {
+    match run(command, cli.json) {
         Ok(out) if cli.json => println!("{}", out.json),
         Ok(out) => println!("{}", out.text),
         Err(error) => {
@@ -128,13 +145,15 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run(command: Command) -> Result<Out, String> {
+fn run(command: Command, json: bool) -> Result<Out, String> {
     let store = Store::open()?;
     let now = time::now();
     match command {
-        Command::Publish { file, title, note, resolves, status } => {
-            ops::publish(&store, &file, title, note, &resolves, status, &now)
-        }
+        Command::Publish { file, url, title, note, resolves, status } => match (file, url) {
+            (_, Some(url)) => ops::publish_url(&store, &url, title, note, &resolves, status, &now),
+            (Some(file), None) => ops::publish(&store, &file, title, note, &resolves, status, &now),
+            (None, None) => Err("give a file or --url".into()),
+        },
         Command::List { status } => ops::list(&store, status),
         Command::Show { id } => ops::show(&store, &id.parse()?),
         Command::Comment { id, body, version, pin, label, quote, line, author } => {
@@ -169,6 +188,7 @@ fn run(command: Command) -> Result<Out, String> {
         }),
         Command::Status { id, status } => ops::set_status(&store, &id.parse()?, status, &now),
         Command::Send { comment } => ops::send_and_request_changes(&store, &comment, &now),
+        Command::Serve { port, host } => server::serve(port, &host, json),
     }
 }
 

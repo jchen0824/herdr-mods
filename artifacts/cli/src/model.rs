@@ -27,6 +27,7 @@ pub enum Kind {
     Svg,
     Pdf,
     Code,
+    Url,
     Other,
 }
 
@@ -43,6 +44,12 @@ pub struct Fraction(f64);
 pub enum Author {
     Person,
     Terminal { address: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Upstream {
+    pub host: String,
+    pub port: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -243,6 +250,33 @@ pub fn kind_of(file_name: &str) -> Kind {
     }
 }
 
+impl Upstream {
+    pub fn origin(&self) -> String {
+        format!("http://{}:{}", self.host, self.port)
+    }
+}
+
+const HTTP_SCHEME: &str = "http://";
+const HTTP_DEFAULT_PORT: u16 = 80;
+
+pub fn parse_url(url: &str) -> Result<(Upstream, String), String> {
+    let rest =
+        url.strip_prefix(HTTP_SCHEME).ok_or_else(|| format!("only http:// URLs can be reviewed live (got {url})"))?;
+    let (authority, path) = rest.find('/').map_or((rest, "/"), |at| rest.split_at(at));
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) => (host, port.parse().map_err(|_| format!("bad port in {url}"))?),
+        None => (authority, HTTP_DEFAULT_PORT),
+    };
+    if host.is_empty() || host.contains(['@', ' ']) {
+        return Err(format!("bad host in {url}"));
+    }
+    Ok((Upstream { host: host.to_owned(), port }, path.to_owned()))
+}
+
+pub fn live_stem(upstream: &Upstream, path: &str) -> String {
+    format!("{}-{}{path}", upstream.host, upstream.port)
+}
+
 pub fn parse_pin(text: &str) -> Result<(Fraction, Fraction), String> {
     let bad = || format!("--pin wants X,Y as fractions from 0 to 1 (got {text})");
     let fraction =
@@ -267,6 +301,10 @@ impl Artifact {
         }
     }
 
+    pub fn live(id: ArtifactId, url: String, first_publisher: Option<String>, now: &str) -> Self {
+        Self { kind: Kind::Url, ..Self::new(id, url.clone(), url, first_publisher, now) }
+    }
+
     pub fn latest(&self) -> u32 {
         self.versions.last().map_or(0, |v| v.n)
     }
@@ -279,8 +317,25 @@ impl Artifact {
         resolves: &[String],
         now: &str,
     ) -> Published {
-        self.updated = now.into();
         let is_new = self.versions.last().is_none_or(|v| v.hash != hash);
+        let n = self.record(is_new, file, hash, note, resolves, now);
+        if is_new { Published::New(n) } else { Published::Unchanged(n) }
+    }
+
+    pub fn publish_live(&mut self, path: &str, note: Option<String>, resolves: &[String], now: &str) -> u32 {
+        self.record(true, path, "", note, resolves, now)
+    }
+
+    fn record(
+        &mut self,
+        is_new: bool,
+        file: &str,
+        hash: &str,
+        note: Option<String>,
+        resolves: &[String],
+        now: &str,
+    ) -> u32 {
+        self.updated = now.into();
         if is_new {
             let n = self.latest() + 1;
             self.versions.push(Version {
@@ -301,7 +356,7 @@ impl Artifact {
                 version.resolves.push(id.clone());
             }
         }
-        if is_new { Published::New(version.n) } else { Published::Unchanged(version.n) }
+        version.n
     }
 }
 
@@ -439,6 +494,24 @@ mod tests {
         assert!(Fraction::try_from(1.5).is_err() && Fraction::try_from(f64::NAN).is_err());
         let stored = serde_json::json!({ "kind": "pin", "x": 2.0, "y": 0.5, "label": null });
         assert!(serde_json::from_value::<Anchor>(stored).is_err());
+    }
+
+    #[test]
+    fn a_live_page_always_gets_a_new_version() {
+        let url = "http://localhost:5173/pricing";
+        let mut a = Artifact::live("p-1".parse().unwrap(), url.into(), None, "t0");
+        assert_eq!((a.kind, a.title.as_str()), (Kind::Url, url));
+        assert_eq!((a.publish_live("/pricing", None, &[], "t1"), a.publish_live("/pricing", None, &[], "t2")), (1, 2));
+    }
+
+    #[test]
+    fn urls_split_into_server_and_path() {
+        let local = |port| Upstream { host: "localhost".into(), port };
+        assert_eq!(parse_url("http://localhost:5173/pricing?a=1"), Ok((local(5173), "/pricing?a=1".into())));
+        assert_eq!(parse_url("http://localhost"), Ok((local(80), "/".into())));
+        for bad in ["https://example.com", "http://:80/", "http://a:x/", "http://u@h/"] {
+            assert!(parse_url(bad).is_err(), "{bad}");
+        }
     }
 
     #[test]

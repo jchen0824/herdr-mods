@@ -1,0 +1,12 @@
+{
+  "name": "herdr-artifact-review-e2e",
+  "private": true,
+  "type": "module",
+  "description": "The review page in Chromium, against the real herdr-artifact binary",
+  "scripts": {
+    "test": "cargo build --locked --manifest-path ../Cargo.toml && playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.65.1"
+  }
+}
