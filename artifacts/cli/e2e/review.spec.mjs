@@ -21,6 +21,7 @@ const cli = (...args) => JSON.parse(execFileSync(BINARY, [...args, "--json"], { 
 const page1 = (version) => `<!doctype html><html><body style="margin:0;font:16px sans-serif">
 <h1 id="title" style="margin:40px">Pricing ${version}</h1>
 <button id="buy" style="margin:40px;padding:20px" onclick="this.textContent='clicked'">Buy</button>
+<a id="next" href="next.html" style="display:block;margin:40px">Next page</a>
 </body></html>`;
 
 test.describe.configure({ mode: "serial" });
@@ -39,6 +40,7 @@ printf '%s\\n' "$@" >> '${hcLog}'
   await new Promise((done) => devServer.listen(0, "127.0.0.1", done));
 
   writeFileSync(join(scratch, "pricing.html"), page1("one"));
+  writeFileSync(join(scratch, "next.html"), '<!doctype html><html><body style="margin:0"><h1 id="next-title" style="margin:40px">Next</h1></body></html>');
   fileId = cli("publish", join(scratch, "pricing.html"), "--title", "Pricing file").id;
   liveId = cli("publish", "--url", `http://127.0.0.1:${devServer.address().port}/live`, "--title", "Live app").id;
 
@@ -143,6 +145,33 @@ test("two artifacts side by side, with the drawer grouped by artifact", async ({
   await expect(page.locator("#panel .group .gname")).toHaveText(["Pricing file", "Live app"]);
   await page.getByRole("button", { name: "All" }).click();
   await expect(page.locator(".thread")).toHaveCount(3);
+});
+
+test("a comment made with the CLI's --pin shows a pin on the page", async ({ page }) => {
+  const { comment } = cli("comment", fileId, "Pinned from the CLI", "--pin", "0.5,0.6");
+  await openReview(page, [fileId]);
+  await expect(page.locator(".thread").filter({ hasText: "Pinned from the CLI" })).toHaveCount(1);
+  const frame = page.frameLocator(".board iframe").first();
+  const point = await frame.locator("body").evaluate((_, a) => ({
+    x: a.x * document.documentElement.scrollWidth - window.scrollX,
+    y: a.y * document.documentElement.scrollHeight - window.scrollY,
+  }), comment.anchor);
+  await expectPin(frame, point);
+});
+
+test("a page the artifact links to takes comments after following the link", async ({ page }) => {
+  await openReview(page, [fileId]);
+  await page.locator("#bar .title").click();
+  await page.keyboard.press("c");
+  const frame = page.frameLocator(".board iframe").first();
+  await frame.locator("#next").click();
+  await expect(frame.locator("#next-title")).toBeVisible();
+  await expect(frame.locator("herdr-review-layer")).toBeAttached();
+  await page.locator("#bar .title").click();
+  await page.keyboard.press("c");
+  await expect(page.locator('.seg.mode [data-v="comment"]')).toHaveAttribute("aria-checked", "true");
+  await frame.locator("#next-title").click();
+  await expect(page.locator(".composer")).toBeVisible();
 });
 
 test("a new version published from the CLI shows without a reload", async ({ page }) => {

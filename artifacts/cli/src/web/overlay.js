@@ -52,6 +52,21 @@
   }
 
   const pointOn = (el, x, y) => { const r = el.getBoundingClientRect(); return { x: r.left + x * r.width, y: r.top + y * r.height }; };
+  const pageSize = () => ({ width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight });
+  const onPage = (anchor) => { const size = pageSize(); return { x: anchor.x * size.width, y: anchor.y * size.height }; };
+
+  function placeOf(anchor) {
+    if (anchor?.kind === "pin") { const at = onPage(anchor); return { x: at.x - window.scrollX, y: at.y - window.scrollY }; }
+    const el = find(anchor);
+    return el ? pointOn(el, anchor.x ?? 1, anchor.y ?? 0) : null;
+  }
+
+  function reveal(anchor) {
+    if (anchor?.kind === "pin") {
+      const at = onPage(anchor);
+      window.scrollTo({ left: at.x - window.innerWidth / 2, top: at.y - window.innerHeight / 2, behavior: "smooth" });
+    } else find(anchor)?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
   const pinBox = (pt) => ({ left: pt.x, top: pt.y - PIN, right: pt.x + PIN, bottom: pt.y, width: PIN, height: PIN });
 
   for (const type of ["click", "mousedown", "mouseup", "pointerdown", "pointerup", "auxclick", "submit"]) {
@@ -82,7 +97,7 @@
       if (!drafting) draftEl = null;
       cursor.textContent = mode === "comment" ? `* { cursor: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='26' height='26' viewBox='0 0 26 26'%3E%3Cpath d='M13 3a10 10 0 0 1 0 20H4a1 1 0 0 1-1-1v-9A10 10 0 0 1 13 3z' fill='%23f0b35a' stroke='%231a1408' stroke-width='1.5'/%3E%3Cpath d='M13 9v8M9 13h8' stroke='%231a1408' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E\") 3 23, crosshair !important; }` : "";
     } else if (m.type === "reveal") {
-      find(m.anchor)?.scrollIntoView({ block: "center", behavior: "smooth" });
+      reveal(m.anchor);
     }
   });
 
@@ -105,9 +120,9 @@
 
     const wanted = new Set(), gone = [];
     for (const c of comments) {
-      const el = find(c.anchor);
-      if (c.anchor?.kind === "element" && !el) gone.push(c.id);
-      if (!el || !(c.open || selected === c.id)) continue;
+      const pt = placeOf(c.anchor);
+      if (c.anchor?.kind === "element" && !pt) gone.push(c.id);
+      if (!pt || !(c.open || selected === c.id)) continue;
       wanted.add(c.id);
       let pin = pins.get(c.id);
       if (!pin) {
@@ -115,7 +130,6 @@
         pin.addEventListener("click", () => post({ type: "pin", id: c.id }));
         pins.set(c.id, pin); root.append(pin);
       }
-      const pt = pointOn(el, c.anchor.x ?? 1, c.anchor.y ?? 0);
       pin.className = `pin${c.open ? "" : " done"}${selected === c.id ? " sel" : ""}`;
       pin.textContent = c.open ? String(c.n) : "✓";
       pin.setAttribute("aria-label", `Comment ${c.n}`);

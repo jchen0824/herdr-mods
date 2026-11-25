@@ -361,7 +361,7 @@ fn file(
     let body = std::fs::read(&path).map_err(|_| Refusal::NotFound)?;
     let name = rest.last().copied().unwrap_or_default();
     let kind = http::content_type(name);
-    if raw || !is_snapshot {
+    if raw || (!is_snapshot && kind != HTML) {
         return Ok(reply(Code::Ok, kind, body));
     }
     let page = if kind == HTML {

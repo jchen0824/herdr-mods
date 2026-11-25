@@ -312,6 +312,7 @@ fn the_review_server_serves_the_page_takes_element_comments_and_refuses_stranger
     let log = fake_hc(&s, json!({ "terminals": [{ "address": "t7", "status": "working" }] }));
     let page = s.file("p.html", "<link rel=stylesheet href=p.css><a class=btn>Talk</a>");
     s.file("p.css", "a{color:red}");
+    s.file("next.html", "<body><p>Next</p></body>");
     fs::write(s.0.join("secret.txt"), "no").unwrap();
     let id = s.ok(Some("t7"), &["publish", &page])["id"].as_str().unwrap().to_owned();
     let other = s.ok(Some("t7"), &["publish", &s.file("o.md", "o")])["id"].as_str().unwrap().to_owned();
@@ -344,6 +345,12 @@ fn the_review_server_serves_the_page_takes_element_comments_and_refuses_stranger
     );
     assert_eq!(cget(&format!("/a/{id}/v1/p.html?raw")).1, "<link rel=stylesheet href=p.css><a class=btn>Talk</a>");
     assert_eq!(cget(&format!("/a/{id}/v1/p.css")), (200, "a{color:red}".into()), "files beside the artifact");
+    assert_eq!(
+        cget(&format!("/a/{id}/v1/next.html")),
+        (200, format!("<body><p>Next</p>{tag}</body>")),
+        "a page it links to gets the comment layer too"
+    );
+    assert_eq!(cget(&format!("/a/{id}/v1/next.html?raw")).1, "<body><p>Next</p></body>");
     assert_eq!(cget(&format!("/a/{id}/v1/..%2Fsecret.txt")).0, 404, "nothing outside its folder");
     assert_eq!(cget(&format!("/a/{id}/v1/../secret.txt")).0, 404);
     assert_eq!(cget(&format!("/a/{id}/v9/p.html")).0, 404);
