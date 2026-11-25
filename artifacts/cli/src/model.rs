@@ -27,6 +27,7 @@ pub enum Kind {
     Svg,
     Pdf,
     Code,
+    Url,
     Other,
 }
 
@@ -39,10 +40,20 @@ pub struct ArtifactId(String);
 pub struct Fraction(f64);
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(try_from = "String")]
+pub struct Page(String);
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Author {
     Person,
     Terminal { address: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Upstream {
+    pub host: String,
+    pub port: u16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -99,9 +110,26 @@ pub struct Comment {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Anchor {
-    Pin { x: Fraction, y: Fraction, label: Option<String> },
-    Text { quote: String, line: Option<u32> },
-    Element { selector: String, label: Option<String>, text: Option<String>, x: Fraction, y: Fraction },
+    Pin {
+        x: Fraction,
+        y: Fraction,
+        label: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        page: Option<Page>,
+    },
+    Text {
+        quote: String,
+        line: Option<u32>,
+    },
+    Element {
+        selector: String,
+        label: Option<String>,
+        text: Option<String>,
+        x: Fraction,
+        y: Fraction,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        page: Option<Page>,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -144,6 +172,51 @@ impl TryFrom<String> for ArtifactId {
 impl fmt::Display for ArtifactId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.0)
+    }
+}
+
+const MAX_PAGE_LENGTH: usize = 2048;
+const ENCODED_DOT: &str = "%2e";
+
+impl FromStr for Page {
+    type Err = String;
+
+    fn from_str(text: &str) -> Result<Self, String> {
+        let path = text.split(['?', '#']).next().unwrap_or_default();
+        let leaves = path.split('/').any(|segment| {
+            let segment = segment.to_ascii_lowercase().replace(ENCODED_DOT, ".");
+            segment == ".." || segment == "."
+        });
+        let inside = !text.is_empty()
+            && text.len() <= MAX_PAGE_LENGTH
+            && !text.starts_with("//")
+            && !path.contains([':', '\\'])
+            && !text.chars().any(char::is_control)
+            && !leaves;
+        if inside { Ok(Self(text.to_owned())) } else { Err(format!("not a page inside the artifact: {text}")) }
+    }
+}
+
+impl TryFrom<String> for Page {
+    type Error = String;
+
+    fn try_from(text: String) -> Result<Self, String> {
+        text.parse()
+    }
+}
+
+impl fmt::Display for Page {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl Anchor {
+    pub fn page(&self) -> Option<&Page> {
+        match self {
+            Self::Pin { page, .. } | Self::Element { page, .. } => page.as_ref(),
+            Self::Text { .. } => None,
+        }
     }
 }
 
@@ -243,6 +316,33 @@ pub fn kind_of(file_name: &str) -> Kind {
     }
 }
 
+impl Upstream {
+    pub fn origin(&self) -> String {
+        format!("http://{}:{}", self.host, self.port)
+    }
+}
+
+const HTTP_SCHEME: &str = "http://";
+const HTTP_DEFAULT_PORT: u16 = 80;
+
+pub fn parse_url(url: &str) -> Result<(Upstream, String), String> {
+    let rest =
+        url.strip_prefix(HTTP_SCHEME).ok_or_else(|| format!("only http:// URLs can be reviewed live (got {url})"))?;
+    let (authority, path) = rest.find('/').map_or((rest, "/"), |at| rest.split_at(at));
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) => (host, port.parse().map_err(|_| format!("bad port in {url}"))?),
+        None => (authority, HTTP_DEFAULT_PORT),
+    };
+    if host.is_empty() || host.contains(['@', ' ']) {
+        return Err(format!("bad host in {url}"));
+    }
+    Ok((Upstream { host: host.to_owned(), port }, path.to_owned()))
+}
+
+pub fn live_stem(upstream: &Upstream, path: &str) -> String {
+    format!("{}-{}{path}", upstream.host, upstream.port)
+}
+
 pub fn parse_pin(text: &str) -> Result<(Fraction, Fraction), String> {
     let bad = || format!("--pin wants X,Y as fractions from 0 to 1 (got {text})");
     let fraction =
@@ -267,6 +367,21 @@ impl Artifact {
         }
     }
 
+    pub fn live(id: ArtifactId, url: String, first_publisher: Option<String>, now: &str) -> Self {
+        Self { kind: Kind::Url, ..Self::new(id, url.clone(), url, first_publisher, now) }
+    }
+
+    pub fn entry_page(&self, version: u32) -> String {
+        match self.kind {
+            Kind::Url => parse_url(&self.source).map(|(_, path)| path).unwrap_or_default(),
+            _ => self.versions.iter().find(|v| v.n == version).map(|v| v.file.clone()).unwrap_or_default(),
+        }
+    }
+
+    pub fn page_of(&self, comment: &Comment) -> String {
+        comment.anchor.as_ref().and_then(Anchor::page).map_or_else(|| self.entry_page(comment.version), Page::to_string)
+    }
+
     pub fn latest(&self) -> u32 {
         self.versions.last().map_or(0, |v| v.n)
     }
@@ -279,8 +394,25 @@ impl Artifact {
         resolves: &[String],
         now: &str,
     ) -> Published {
-        self.updated = now.into();
         let is_new = self.versions.last().is_none_or(|v| v.hash != hash);
+        let n = self.record(is_new, file, hash, note, resolves, now);
+        if is_new { Published::New(n) } else { Published::Unchanged(n) }
+    }
+
+    pub fn publish_live(&mut self, path: &str, note: Option<String>, resolves: &[String], now: &str) -> u32 {
+        self.record(true, path, "", note, resolves, now)
+    }
+
+    fn record(
+        &mut self,
+        is_new: bool,
+        file: &str,
+        hash: &str,
+        note: Option<String>,
+        resolves: &[String],
+        now: &str,
+    ) -> u32 {
+        self.updated = now.into();
         if is_new {
             let n = self.latest() + 1;
             self.versions.push(Version {
@@ -301,7 +433,7 @@ impl Artifact {
                 version.resolves.push(id.clone());
             }
         }
-        if is_new { Published::New(version.n) } else { Published::Unchanged(version.n) }
+        version.n
     }
 }
 
@@ -439,6 +571,58 @@ mod tests {
         assert!(Fraction::try_from(1.5).is_err() && Fraction::try_from(f64::NAN).is_err());
         let stored = serde_json::json!({ "kind": "pin", "x": 2.0, "y": 0.5, "label": null });
         assert!(serde_json::from_value::<Anchor>(stored).is_err());
+    }
+
+    #[test]
+    fn a_live_page_always_gets_a_new_version() {
+        let url = "http://localhost:5173/pricing";
+        let mut a = Artifact::live("p-1".parse().unwrap(), url.into(), None, "t0");
+        assert_eq!((a.kind, a.title.as_str()), (Kind::Url, url));
+        assert_eq!((a.publish_live("/pricing", None, &[], "t1"), a.publish_live("/pricing", None, &[], "t2")), (1, 2));
+    }
+
+    #[test]
+    fn urls_split_into_server_and_path() {
+        let local = |port| Upstream { host: "localhost".into(), port };
+        assert_eq!(parse_url("http://localhost:5173/pricing?a=1"), Ok((local(5173), "/pricing?a=1".into())));
+        assert_eq!(parse_url("http://localhost"), Ok((local(80), "/".into())));
+        for bad in ["https://example.com", "http://:80/", "http://a:x/", "http://u@h/"] {
+            assert!(parse_url(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_page_must_stay_inside_the_artifact() {
+        for good in ["next.html", "docs/a b.html", "/pricing?plan=pro&back=http://x", "/app#/settings"] {
+            assert!(good.parse::<Page>().is_ok(), "{good}");
+        }
+        for bad in
+            ["", "//evil.example/x", "http://evil.example/", "javascript:alert(1)", "../secret.html", "a/../../b"]
+        {
+            assert!(bad.parse::<Page>().is_err(), "{bad}");
+        }
+        for bad in ["/a/%2E%2E/b", "./x", "a\\..\\b", "a\nb"] {
+            assert!(bad.parse::<Page>().is_err(), "{bad}");
+        }
+        let stored = serde_json::json!({ "kind": "pin", "x": 0.5, "y": 0.5, "label": null, "page": "../x" });
+        assert!(serde_json::from_value::<Anchor>(stored).is_err());
+    }
+
+    #[test]
+    fn a_comment_without_a_page_is_on_the_entry_page() {
+        let mut file = Artifact::new("a-1".parse().unwrap(), "A".into(), "/site/index.html".into(), None, "t");
+        file.publish("index.html", "h", None, &[], "t");
+        let half = Fraction::try_from(0.5).unwrap();
+        let pin =
+            |page: Option<&str>| Anchor::Pin { x: half, y: half, label: None, page: page.map(|p| p.parse().unwrap()) };
+        let mut comments = Comments::default();
+        let draft = |anchor| Draft { anchor: Some(anchor), body: "b".into(), author: Author::Person };
+        let old = comments.add(1, draft(pin(None)), &HashSet::new(), "t").clone();
+        let linked = comments.add(1, draft(pin(Some("next.html"))), &HashSet::new(), "t").clone();
+        assert_eq!((file.page_of(&old), file.page_of(&linked)), ("index.html".into(), "next.html".into()));
+        let live = Artifact::live("l-1".parse().unwrap(), "http://localhost:5173/app?x=1".into(), None, "t");
+        assert_eq!(live.page_of(&old), "/app?x=1");
+        assert!(!serde_json::to_string(&pin(None)).unwrap().contains("page"), "older readers see no new field");
     }
 
     #[test]

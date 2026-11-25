@@ -3,7 +3,10 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::agent::{self, TerminalState};
-use crate::model::{Anchor, Artifact, ArtifactId, Author, Comment, Draft, Published, Status, artifact_id_for, fnv1a};
+use crate::model::{
+    Anchor, Artifact, ArtifactId, Author, Comment, Comments, Draft, Published, Status, artifact_id_for, fnv1a,
+    live_stem, parse_url,
+};
 use crate::store::Store;
 
 pub struct Out {
@@ -51,9 +54,7 @@ pub fn publish(
         Artifact::new(id.clone(), file_name.clone(), source_text.to_owned(), this_terminal(), now)
     };
     let mut comments = store.comments(&id)?;
-    if let Some(missing) = resolves.iter().find(|r| !comments.comments.iter().any(|c| &c.id == *r)) {
-        return Err(format!("no comment {missing} on {id}"));
-    }
+    refuse_unknown(&comments, resolves, &id)?;
     if let Some(title) = title {
         artifact.title = title;
     }
@@ -64,14 +65,7 @@ pub fn publish(
         Published::New(n) => store.snapshot(&id, n, &file_name, &content)?,
         Published::Unchanged(n) => store.version_path(&id, n, &file_name),
     };
-    for resolved in resolves {
-        if let Some(comment) = comments.get(resolved) {
-            comment.resolve(Some(version));
-        }
-    }
-    if !resolves.is_empty() {
-        store.save_comments(&id, &comments)?;
-    }
+    close_resolved(store, &id, &mut comments, resolves, version)?;
     store.save_artifact(&artifact)?;
 
     let what = match published {
@@ -83,6 +77,64 @@ pub fn publish(
         text: format!("{what}{closed}"),
         json: json!({ "id": id, "version": version, "new": matches!(published, Published::New(_)), "path": path,
                       "status": status, "resolved": resolves }),
+    })
+}
+
+fn refuse_unknown(comments: &Comments, resolves: &[String], id: &ArtifactId) -> Result<(), String> {
+    match resolves.iter().find(|r| !comments.comments.iter().any(|c| &c.id == *r)) {
+        Some(missing) => Err(format!("no comment {missing} on {id}")),
+        None => Ok(()),
+    }
+}
+
+fn close_resolved(
+    store: &Store,
+    id: &ArtifactId,
+    comments: &mut Comments,
+    resolves: &[String],
+    version: u32,
+) -> Result<(), String> {
+    if resolves.is_empty() {
+        return Ok(());
+    }
+    for resolved in resolves {
+        if let Some(comment) = comments.get(resolved) {
+            comment.resolve(Some(version));
+        }
+    }
+    store.save_comments(id, comments)
+}
+
+pub fn publish_url(
+    store: &Store,
+    url: &str,
+    title: Option<String>,
+    note: Option<String>,
+    resolves: &[String],
+    status: Status,
+    now: &str,
+) -> Result<Out, String> {
+    let (upstream, path) = parse_url(url)?;
+    let _lock = store.lock()?;
+    let id = artifact_id_for(url, &live_stem(&upstream, &path), |id| store.artifact(id).ok().map(|a| a.source));
+    let mut artifact = if store.exists(&id) {
+        store.artifact(&id)?
+    } else {
+        Artifact::live(id.clone(), url.to_owned(), this_terminal(), now)
+    };
+    let mut comments = store.comments(&id)?;
+    refuse_unknown(&comments, resolves, &id)?;
+    if let Some(title) = title {
+        artifact.title = title;
+    }
+    let version = artifact.publish_live(&path, note, resolves, now);
+    artifact.status = status;
+    close_resolved(store, &id, &mut comments, resolves, version)?;
+    store.save_artifact(&artifact)?;
+    let closed = if resolves.is_empty() { String::new() } else { format!(", resolved {}", resolves.join(" ")) };
+    Ok(Out {
+        text: format!("published {id} v{version} (live at {url}){closed}"),
+        json: json!({ "id": id, "version": version, "new": true, "url": url, "status": status, "resolved": resolves }),
     })
 }
 
@@ -141,7 +193,7 @@ fn thread(c: &Comment) -> String {
         (false, None) => "resolved".to_owned(),
     };
     let anchor = match &c.anchor {
-        Some(Anchor::Pin { x, y, label }) => {
+        Some(Anchor::Pin { x, y, label, .. }) => {
             format!(" pin {x:.3},{y:.3}{}", label.as_ref().map(|l| format!(" ({l})")).unwrap_or_default())
         }
         Some(Anchor::Text { quote, line }) => {
@@ -154,7 +206,8 @@ fn thread(c: &Comment) -> String {
         ),
         None => String::new(),
     };
-    let mut text = format!("{} [{state}, v{}]{anchor}\n  {}: {}", c.id, c.version, c.author, c.body);
+    let page = c.anchor.as_ref().and_then(Anchor::page).map(|p| format!(" on {p}")).unwrap_or_default();
+    let mut text = format!("{} [{state}, v{}]{anchor}{page}\n  {}: {}", c.id, c.version, c.author, c.body);
     for r in &c.replies {
         text.push_str(&format!("\n  {}: {}", r.author, r.body));
     }
@@ -233,7 +286,7 @@ pub fn send_and_request_changes(store: &Store, comment: &str, now: &str) -> Resu
         TerminalState::NoAgent => {
             return Err(format!("{terminal} is not running an agent now: the comment is saved, not sent"));
         }
-        TerminalState::Agent => {}
+        TerminalState::Agent(_) => {}
     }
     agent::type_and_submit(&terminal, &agent::message(&artifact, &found))?;
     record_delivery(store, &id, comment, now)?;
