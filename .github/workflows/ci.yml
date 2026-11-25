@@ -65,6 +65,22 @@ jobs:
       - run: herdr-app --version
       - run: make herdr-check
 
+  artifact-cli:
+    name: artifact-cli
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: artifacts/cli
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustc --version && cargo --version
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+
   conventional-commits:
     name: conventional-commits
     if: github.event_name == 'pull_request'
