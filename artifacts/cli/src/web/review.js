@@ -61,10 +61,14 @@ const canSend = (b) => b.data.agent?.state === "agent";
 const isPerson = (author) => author.kind === "person";
 const agentState = (b) => (canSend(b) ? `(${b.data.agent.status})` : "(no agent running)");
 const who = (b, author) => (isPerson(author) ? "You" : author.address === b.data.agent?.terminal ? agentName(b) : author.address);
+const entryPage = (b) => (live(b) ? b.data.frame.path : b.data.artifact.versions.find((x) => x.n === b.version).file);
+const pageOf = (b, c) => c.anchor?.page ?? entryPage(b);
+const CONTENT_PREFIX = /^\/a\/[^/]+\/v\d+\//;
+const pageFrom = (b, m) => (live(b) ? m.path + m.search : m.path.replace(CONTENT_PREFIX, "").split("/").map(decodeURIComponent).join("/"));
 const isSel = (b, c) => Boolean(selected && selected.board === b && selected.id === c.id);
 
 function addBoard(id) {
-  const b = { id, data: null, version: null, follow: true, ready: false, gone: new Set(), src: "" };
+  const b = { id, data: null, version: null, follow: true, ready: false, gone: new Set(), src: "", page: null, revealing: null };
   b.frame = h("iframe", { title: "An artifact under review" });
   b.layer = h("div", { class: "layer" });
   b.shot = h("div", { class: "shot" }, b.frame, b.layer);
@@ -85,9 +89,13 @@ function removeBoard(b) {
 
 const syncAddress = () => history.replaceState(null, "", `/review/${boards.map((b) => encodeURIComponent(b.id)).join(",")}`);
 
-function loadFrame(b) {
-  const f = b.data.frame, v = b.data.artifact.versions.find((x) => x.n === b.version);
-  const src = f.path !== undefined ? f.origin + f.path : `${f.origin}/a/${encodeURIComponent(b.id)}/v${b.version}/${encodeURIComponent(v.file)}`;
+function pageSrc(b, page) {
+  const f = b.data.frame;
+  return live(b) ? f.origin + page : `${f.origin}/a/${encodeURIComponent(b.id)}/v${b.version}/${page.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+function loadFrame(b, page = b.page || entryPage(b)) {
+  const src = pageSrc(b, page);
   if (draft?.board === b) draft = null;
   b.ready = false; b.src = src; b.frame.src = src;
   setTimeout(() => {
@@ -99,14 +107,30 @@ function push(b) {
   if (!b.ready || !b.data) return;
   b.frame.contentWindow.postMessage({ herdr: true, type: "state", mode, scale, selected: selected?.board === b ? selected.id : null,
     drafting: draft?.board === b,
-    comments: b.data.comments.map((c, i) => ({ id: c.id, n: i + 1, open: c.open, anchor: c.anchor })) }, b.data.frame.origin);
+    comments: b.data.comments.map((c, i) => ({ id: c.id, n: i + 1, open: c.open, anchor: c.anchor, page: pageOf(b, c) }))
+      .filter((c) => c.page === b.page) }, b.data.frame.origin);
+}
+
+function reveal(b, c) {
+  b.frame.contentWindow.postMessage({ herdr: true, type: "reveal", anchor: c.anchor }, b.data.frame.origin);
+}
+
+function arrive(b, m) {
+  const page = pageFrom(b, m);
+  if (page !== b.page && draft?.board === b) draft = null;
+  b.page = page;
+  b.gone = new Set();
+  render();
+  const waiting = b.data.comments.find((c) => c.id === b.revealing && pageOf(b, c) === page);
+  if (waiting) { b.revealing = null; reveal(b, waiting); }
 }
 
 window.addEventListener("message", (e) => {
   const b = boards.find((x) => x.data && e.source === x.frame.contentWindow && e.origin === x.data.frame.origin);
   if (!b || !e.data || e.data.herdr !== true) return;
   const m = e.data;
-  if (m.type === "ready") { b.ready = true; if (failed) { notice = ""; failed = false; } renderPanel(); }
+  if (m.type === "ready") { b.ready = true; if (failed) { notice = ""; failed = false; } arrive(b, m); }
+  else if (m.type === "path") arrive(b, m);
   else if (m.type === "select") {
     draft = { board: b, rect: m.rect, anchor: m.anchor, text: "", toAgent: canSend(b) }; selected = null; render();
     b.el.scrollIntoView({ inline: "nearest", block: "nearest", behavior: "smooth" });
@@ -204,7 +228,7 @@ async function send() {
   const b = sending.board;
   draft = null; renderComposer();
   try {
-    const made = await api(url(b, "/comments"), { body, version: b.version, anchor: sending.anchor, to_agent: sending.toAgent });
+    const made = await api(url(b, "/comments"), { body, version: b.version, anchor: { ...sending.anchor, page: b.page }, to_agent: sending.toAgent });
     selected = { board: b, id: made.comment.id };
     notice = made.delivered === false ? `Saved, but not delivered: ${made.delivery_error}` : sending.toAgent ? `Sent to ${agentName(b)}.` : "Note saved.";
     failed = made.delivered === false;
@@ -225,7 +249,8 @@ function showSelected() {
   if (!selected) return;
   const b = selected.board, c = b.data.comments.find((x) => x.id === selected.id);
   b.el.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
-  if (c && b.ready) b.frame.contentWindow.postMessage({ herdr: true, type: "reveal", anchor: c.anchor }, b.data.frame.origin);
+  if (c && pageOf(b, c) !== b.page) { b.revealing = c.id; loadFrame(b, pageOf(b, c)); }
+  else if (c && b.ready) reveal(b, c);
   document.querySelector(".thread.sel")?.scrollIntoView({ block: "nearest" });
 }
 
@@ -264,6 +289,7 @@ function thread(b, c, n) {
     h("div", { class: "row" },
       h("span", { class: `pin${c.open ? "" : " done"}` }, c.open ? String(n) : "✓"),
       a && a.kind === "element" ? h("span", { class: "chip mono" }, a.label || "element") : null,
+      pageOf(b, c) !== b.page ? h("span", { class: "chip mono page", title: "Selecting it opens that page" }, pageOf(b, c)) : null,
       h("span", { class: "meta" }, `${who(b, c.author)}${c.sent_to_agent ? "" : " · note"}${c.open ? "" : c.resolved_in ? ` · resolved in v${c.resolved_in}` : " · resolved"}`),
       h("span", { class: "time" }, ago(c.at))),
     h("div", { class: sel ? "" : "clip" }, c.body),

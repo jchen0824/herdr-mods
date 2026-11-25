@@ -160,7 +160,7 @@ fn run(command: Command, json: bool) -> Result<Out, String> {
             let anchor = match (pin, quote) {
                 (Some(pin), _) => {
                     let (x, y) = parse_pin(&pin)?;
-                    Some(Anchor::Pin { x, y, label })
+                    Some(Anchor::Pin { x, y, label, page: None })
                 }
                 (None, Some(quote)) => Some(Anchor::Text { quote, line }),
                 (None, None) => None,

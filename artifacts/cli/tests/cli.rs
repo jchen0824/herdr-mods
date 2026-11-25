@@ -401,15 +401,28 @@ fn the_review_server_serves_the_page_takes_element_comments_and_refuses_stranger
     assert_eq!(s.ok(None, &["show", &other])["comments"][0]["open"], true, "another artifact's comment is untouched");
     let outside = r#"{"body":"x","anchor":{"kind":"pin","x":2,"y":0.5,"label":null}}"#;
     assert_eq!(post(&format!("/api/artifacts/{id}/comments"), outside).0, 400, "a pin off the page");
+    let on_page = |page: &str| {
+        format!(r#"{{"body":"x","anchor":{{"kind":"pin","x":0.5,"y":0.5,"label":null,"page":{page:?}}}}}"#)
+    };
+    for page in ["../secret.txt", "http://evil.example/", "//evil.example/x", "a/%2e%2e/%2e%2e/b"] {
+        assert_eq!(post(&format!("/api/artifacts/{id}/comments"), &on_page(page)).0, 400, "{page}");
+    }
+    let (code, linked) = post(&format!("/api/artifacts/{id}/comments"), &on_page("next.html"));
+    assert_eq!(code, 200, "{linked}");
+    let linked: Value = serde_json::from_str(&linked).unwrap();
+    assert_eq!(linked["comment"]["anchor"]["page"], "next.html");
+    let linked_id = linked["comment"]["id"].as_str().unwrap();
+    assert_eq!(post(&format!("/api/artifacts/{id}/comments/{linked_id}"), r#"{"action":"resolve"}"#).0, 200);
     assert_eq!(post(&thread, r#"{"action":"resolve"}"#).0, 200);
     assert_eq!(s.ok(None, &["show", &id])["comments"][0]["open"], false);
+    assert!(s.ok(None, &["show", &id])["comments"][1]["anchor"]["page"] == "next.html");
     assert_eq!(post(&format!("/api/artifacts/{id}/status"), approve).0, 200);
 
     let stranger = [("Host", host.as_str()), ("Origin", "https://evil.example"), ("Content-Type", "application/json")];
     assert_eq!(http(port, "POST", &format!("/api/artifacts/{id}/comments"), &stranger, &comment).0, 403);
     assert_eq!(http(port, "GET", "/api/ping", &[("Host", "evil.example")], "").0, 403);
     assert_eq!(http(port, "GET", "/api/ping", &[("Host", &chost)], "").0, 403, "the content port's name");
-    assert_eq!(s.ok(None, &["show", &id])["comments"].as_array().unwrap().len(), 1, "a refused post saves nothing");
+    assert_eq!(s.ok(None, &["show", &id])["comments"].as_array().unwrap().len(), 2, "a refused post saves nothing");
 }
 
 #[cfg(unix)]

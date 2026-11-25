@@ -20,14 +20,14 @@ pub fn message(a: &Artifact, c: &Comment) -> String {
     let what = if c.replies.is_empty() { "Comment" } else { "Reply in a comment thread" };
     let mut lines = vec![format!("[Herdr artifact] {what} on \"{}\" v{} ({})", a.title, c.version, a.id)];
     match &c.anchor {
-        Some(Anchor::Pin { x, y, label }) => lines.push(format!(
-            "Pinned at {x:.3},{y:.3} of the rendered artifact (fractions of its width and height){}",
+        Some(Anchor::Pin { x, y, label, .. }) => lines.push(format!(
+            "Pinned at {x:.3},{y:.3} of the rendered page (fractions of its width and height){}",
             label.as_ref().map(|l| format!(": {l}")).unwrap_or_default()
         )),
         Some(Anchor::Text { quote, line }) => {
             lines.push(format!("On{}: \"{quote}\"", line.map(|l| format!(" line {l}")).unwrap_or_default()));
         }
-        Some(Anchor::Element { selector, label, text, x, y }) => lines.push(format!(
+        Some(Anchor::Element { selector, label, text, x, y, .. }) => lines.push(format!(
             "Pinned on the element {}{}, {:.0}% across and {:.0}% down it (selector: {selector})",
             label.as_deref().unwrap_or("?"),
             text.as_ref().filter(|t| !t.is_empty()).map(|t| format!(" \"{t}\"")).unwrap_or_default(),
@@ -35,6 +35,9 @@ pub fn message(a: &Artifact, c: &Comment) -> String {
             y.get() * 100.0
         )),
         None => {}
+    }
+    if matches!(c.anchor, Some(Anchor::Pin { .. } | Anchor::Element { .. })) {
+        lines.push(format!("Page: {}", a.page_of(c)));
     }
     lines.push(format!("\"{}\"", c.body));
     for r in &c.replies {
@@ -92,6 +95,7 @@ mod tests {
             text: Some("Book a demo".into()),
             x: half,
             y: half,
+            page: Some("plans/next.html".parse().unwrap()),
         };
         let draft = Draft { anchor: Some(anchor), body: "Open the calendar".into(), author: Author::Person };
         let comment = c.add(3, draft, &HashSet::new(), "t").clone();
@@ -100,8 +104,22 @@ mod tests {
             text.contains("\"Pricing\" v3 (p-1)")
                 && text.contains("a.btn \"Book a demo\", 50% across and 50% down it (selector: body > a)")
         );
+        assert!(text.contains("\nPage: plans/next.html\n"), "{text}");
         assert!(text.contains("\"Open the calendar\"") && text.contains(&format!("reply {}", comment.id)));
         assert!(text.contains(&format!("publish \"/site/p.html\" -m \"what changed\" --resolves {}", comment.id)));
+    }
+
+    #[test]
+    fn a_pin_without_a_page_names_the_entry_page() {
+        let mut a = Artifact::new("p-1".parse().unwrap(), "P".into(), "/site/p.html".into(), Some("t7".into()), "t");
+        a.publish("p.html", "h", None, &[], "t");
+        let half = Fraction::try_from(0.5).unwrap();
+        let anchor = Anchor::Pin { x: half, y: half, label: None, page: None };
+        let draft = Draft { anchor: Some(anchor), body: "x".into(), author: Author::Person };
+        let comment = Comments::default().add(1, draft, &HashSet::new(), "t").clone();
+        assert!(message(&a, &comment).contains("\nPage: p.html\n"));
+        let plain = Draft { anchor: None, body: "x".into(), author: Author::Person };
+        assert!(!message(&a, &Comments::default().add(1, plain, &HashSet::new(), "t").clone()).contains("Page:"));
     }
 
     #[test]

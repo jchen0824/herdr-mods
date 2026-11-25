@@ -193,7 +193,7 @@ fn thread(c: &Comment) -> String {
         (false, None) => "resolved".to_owned(),
     };
     let anchor = match &c.anchor {
-        Some(Anchor::Pin { x, y, label }) => {
+        Some(Anchor::Pin { x, y, label, .. }) => {
             format!(" pin {x:.3},{y:.3}{}", label.as_ref().map(|l| format!(" ({l})")).unwrap_or_default())
         }
         Some(Anchor::Text { quote, line }) => {
@@ -206,7 +206,8 @@ fn thread(c: &Comment) -> String {
         ),
         None => String::new(),
     };
-    let mut text = format!("{} [{state}, v{}]{anchor}\n  {}: {}", c.id, c.version, c.author, c.body);
+    let page = c.anchor.as_ref().and_then(Anchor::page).map(|p| format!(" on {p}")).unwrap_or_default();
+    let mut text = format!("{} [{state}, v{}]{anchor}{page}\n  {}: {}", c.id, c.version, c.author, c.body);
     for r in &c.replies {
         text.push_str(&format!("\n  {}: {}", r.author, r.body));
     }

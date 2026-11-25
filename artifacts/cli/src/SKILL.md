@@ -43,8 +43,10 @@ Comments reach your terminal with their id (`c_8f2a1b`). Read them all with:
 herdr-artifact show <artifact-id>
 ```
 
-A pin is a point on the rendered artifact, as fractions of its width and height, with a label saying
-what is there. A quote is text from the file. After you act on a comment:
+A pin is a point on the rendered page, as fractions of its width and height, with a label saying
+what is there. A quote is text from the file. A pin or an element comment says which page it is on
+(`Page: pricing.html`): the published file, a page in the same folder that it links to, or for a
+dev server the path and query inside the app. After you act on a comment:
 
 ```sh
 herdr-artifact publish site/pricing.html -m "Monthly/yearly toggle" --resolves c_8f2a1b
@@ -61,6 +63,7 @@ The person reviews an HTML artifact or a live page in their browser and can comm
 element. Such a comment names it: `Pinned on the element a.btn "Book a demo", 50% across and 50%
 down it (selector: body > div > a)`. The pin is the point the person clicked; the element is what
 was under it. The selector is how the page found it; the label and text are how you recognize it.
+The `Page:` line says which page the element is on. Two pages can have the same selector.
 
 ## Everything
 

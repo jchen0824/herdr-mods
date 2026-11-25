@@ -49,7 +49,12 @@ herdr-artifact serve [--port 7501] [--host NAME]
 | `/review/<id>,<id>` | several artifacts side by side, with the drawer grouped by artifact |
 
 In Comment mode (`c` toggles it) a click drops a pin and opens a comment box. The comment is saved
-as a note, or sent to the agent that published the artifact. A reply typed on a sent comment goes
+as a note, or sent to the agent that published the artifact. It records the page it was made on:
+for a file, the file's path inside the folder it was published from (a page it links to counts);
+for a dev server, the path and query inside the app. A comment with no page, such as one made with
+`comment --pin`, is on the entry page. An artboard shows pins only for the page it is showing. The
+drawer lists every thread, names the page of one made elsewhere, and selecting it opens that page.
+The server refuses a page with a scheme, a host or a `..` segment. A reply typed on a sent comment goes
 to the agent too, with the whole thread. The page checks the store every few seconds, so a new
 version or an agent's reply shows without a reload.
 
@@ -82,7 +87,7 @@ Everything is under `~/.herdr/artifacts` (`HERDR_ARTIFACTS_HOME` moves it):
 |---|---|
 | `<id>/artifact.json` | title, source path, kind, status, the terminal that first published it (`first_publisher`), and the list of versions |
 | `<id>/v<n>/<file>` | the file as it was when version `n` was published |
-| `<id>/comments.json` | comment threads: anchor, body, author (`person` or a terminal), whether `send` delivered it (`sent_to_agent`), replies, open or resolved, and the version that resolved it |
+| `<id>/comments.json` | comment threads: anchor (with its page, for pins and elements), body, author (`person` or a terminal), whether `send` delivered it (`sent_to_agent`), replies, open or resolved, and the version that resolved it |
 
 The id comes from the source path, so publishing the same file again adds a version to the same
 artifact. Unchanged content adds none. Every write replaces its file whole, so a reader never sees

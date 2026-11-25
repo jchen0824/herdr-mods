@@ -7,7 +7,7 @@
   const PIN = 24, TEXT_LIMIT = 80, TROUBLE_LIMIT = 200, MIDDLE = 0.5;
   let mode = "page", comments = [], selected = null, drafting = false;
   let frameScale = 1;
-  let draftEl = null, draftAt = null, lastRect = "", lastGone = "";
+  let draftEl = null, draftAt = null, lastRect = "", lastGone = "", lastPlace = location.href;
 
   const host = document.createElement("herdr-review-layer");
   host.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2147483647;display:block";
@@ -109,8 +109,11 @@
   window.addEventListener("unhandledrejection", (e) => post({ type: "trouble", text: String(e.reason).slice(0, TROUBLE_LIMIT) }));
 
   const pins = new Map();
+  const place = () => ({ path: location.pathname, search: location.search });
+
   function draw() {
     if (!host.isConnected) mount();
+    if (location.href !== lastPlace) { lastPlace = location.href; post({ type: "path", ...place() }); }
     if (draftEl && draftEl.isConnected && draftAt) {
       const pt = pointOn(draftEl, draftAt.x, draftAt.y), rect = pinBox(pt), key = JSON.stringify(rect);
       Object.assign(draftPin.style, { left: `${pt.x}px`, top: `${pt.y}px`, transform: `scale(${1 / frameScale})` });
@@ -141,5 +144,5 @@
     requestAnimationFrame(draw);
   }
   requestAnimationFrame(draw);
-  post({ type: "ready", path: location.pathname });
+  post({ type: "ready", ...place() });
 })();

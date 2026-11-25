@@ -40,7 +40,7 @@ printf '%s\\n' "$@" >> '${hcLog}'
   await new Promise((done) => devServer.listen(0, "127.0.0.1", done));
 
   writeFileSync(join(scratch, "pricing.html"), page1("one"));
-  writeFileSync(join(scratch, "next.html"), '<!doctype html><html><body style="margin:0"><h1 id="next-title" style="margin:40px">Next</h1></body></html>');
+  writeFileSync(join(scratch, "next.html"), '<!doctype html><html><body style="margin:0"><h1 id="title" style="margin:40px 40px 40px 300px">Next</h1></body></html>');
   fileId = cli("publish", join(scratch, "pricing.html"), "--title", "Pricing file").id;
   liveId = cli("publish", "--url", `http://127.0.0.1:${devServer.address().port}/live`, "--title", "Live app").id;
 
@@ -62,11 +62,10 @@ async function openReview(page, ids) {
   for (let i = 0; i < ids.length; i++) await expect(page.frameLocator(".board iframe").nth(i).locator("herdr-review-layer")).toBeAttached();
 }
 
-async function pinTarget(page, frameIndex, selector) {
+async function pinTarget(page, frameIndex, selector, at = { x: 10, y: 10 }) {
   const frame = page.frameLocator(".board iframe").nth(frameIndex);
   const target = frame.locator(selector);
   const box = await target.evaluate((el) => { const r = el.getBoundingClientRect(); return { left: r.left, top: r.top }; });
-  const at = { x: 10, y: 10 };
   await target.click({ position: at });
   return { frame, point: { x: box.left + at.x, y: box.top + at.y } };
 }
@@ -165,13 +164,75 @@ test("a page the artifact links to takes comments after following the link", asy
   await page.keyboard.press("c");
   const frame = page.frameLocator(".board iframe").first();
   await frame.locator("#next").click();
-  await expect(frame.locator("#next-title")).toBeVisible();
+  await expect(frame.locator("#title")).toHaveText("Next");
   await expect(frame.locator("herdr-review-layer")).toBeAttached();
   await page.locator("#bar .title").click();
   await page.keyboard.press("c");
   await expect(page.locator('.seg.mode [data-v="comment"]')).toHaveAttribute("aria-checked", "true");
-  await frame.locator("#next-title").click();
+  await frame.locator("#title").click();
   await expect(page.locator(".composer")).toBeVisible();
+});
+
+async function toggleMode(page) {
+  await page.locator("#bar .title").click();
+  await page.keyboard.press("c");
+}
+
+async function followLink(page) {
+  await toggleMode(page);
+  const frame = page.frameLocator(".board iframe").first();
+  await frame.locator("#next").click();
+  await expect(frame.locator("#title")).toHaveText("Next");
+  await expect(frame.locator("herdr-review-layer")).toBeAttached();
+  await toggleMode(page);
+  await expect(page.locator('.seg.mode [data-v="comment"]')).toHaveAttribute("aria-checked", "true");
+}
+
+const pointOf = (frame, anchor) =>
+  frame.locator("body").evaluate((_, a) => {
+    const r = document.querySelector(a.selector).getBoundingClientRect();
+    return { x: r.left + a.x * r.width, y: r.top + a.y * r.height };
+  }, anchor);
+
+const commentNamed = (body) => cli("show", fileId).comments.find((c) => c.body === body);
+
+test("a comment on a linked page shows there, not on the entry page, and its thread opens that page", async ({ page }) => {
+  await openReview(page, [fileId]);
+  await followLink(page);
+  await pinTarget(page, 0, "#title", { x: 200, y: 10 });
+  await saveComment(page, "On the next page", "Note");
+  const anchor = commentNamed("On the next page").anchor;
+  expect(anchor.page).toBe("next.html");
+
+  await openReview(page, [fileId]);
+  const frame = page.frameLocator(".board iframe").first();
+  await expect(frame.locator("#title")).toContainText("Pricing");
+  const thread = page.locator(".thread").filter({ hasText: "On the next page" });
+  await expect(thread.locator(".chip.page")).toHaveText("next.html");
+  await page.waitForTimeout(300);
+  expect(await underPin(frame, await pointOf(frame, anchor))).not.toBe("herdr-review-layer");
+
+  await thread.click();
+  await expect(frame.locator("#title")).toHaveText("Next");
+  await expectPin(frame, await pointOf(frame, anchor));
+  await expect(thread.locator(".chip.page")).toHaveCount(0);
+});
+
+test("two pages with the same selector keep their pins apart", async ({ page }) => {
+  const entry = commentNamed("Name the plan").anchor;
+  const next = commentNamed("On the next page").anchor;
+  expect([entry.selector, next.selector]).toEqual(["#title", "#title"]);
+
+  await openReview(page, [fileId]);
+  const frame = page.frameLocator(".board iframe").first();
+  await expectPin(frame, await pointOf(frame, entry));
+  await page.waitForTimeout(300);
+  expect(await underPin(frame, await pointOf(frame, next))).not.toBe("herdr-review-layer");
+
+  await page.locator(".thread").filter({ hasText: "On the next page" }).click();
+  await expect(frame.locator("#title")).toHaveText("Next");
+  await expectPin(frame, await pointOf(frame, next));
+  expect(await underPin(frame, await pointOf(frame, entry))).not.toBe("herdr-review-layer");
 });
 
 test("a new version published from the CLI shows without a reload", async ({ page }) => {
